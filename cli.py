@@ -88,6 +88,28 @@ def _inherit_bus_options(sub):
     return sub
 
 
+def add_group(sub, name, help):
+    """A command with actions of its own (``app NAME ACTION ...``).
+
+    Returns the actions' subparsers, which accept the bus options like every
+    command.  ``app NAME`` alone prints the group's help and exits 2.
+    """
+    group = sub.add_parser(name, help=help, description=help)
+    actions = _inherit_bus_options(
+        group.add_subparsers(dest=name.replace('-', '_') + '_command',
+                             metavar='ACTION'))
+    group.set_defaults(func=lambda ctx: (group.print_help(), EXIT_USAGE)[1],
+                       needs_bus=False)
+    return actions
+
+
+def add_action(actions, name, func, help, needs_node=False, needs_bus=True):
+    """One action on a group; returns its parser for the arguments."""
+    p = actions.add_parser(name, help=help, description=help)
+    p.set_defaults(func=func, needs_node=needs_node, needs_bus=needs_bus)
+    return p
+
+
 def make_parser(prog, description, version=None):
     """(parser, subparsers) with the bus options on the top-level parser and
     on every subcommand."""
@@ -139,8 +161,12 @@ def resolve_node(session, node_id, reporter):
     return found[0]
 
 
-def main(parser, argv=None, session_factory=Session):
-    """Parse, connect, run the command, and return an exit code."""
+def main(parser, argv=None, session_factory=Session, failures=(), aborts=()):
+    """Parse, connect, run the command, and return an exit code.
+
+    *failures* and *aborts* are an app's own exception types that mean
+    'the operation failed' (exit 1) and 'the operation was stopped' (130).
+    """
     args = parser.parse_args(argv)
     if not getattr(args, 'func', None):
         parser.print_help()
@@ -167,14 +193,14 @@ def main(parser, argv=None, session_factory=Session):
     except KeyboardInterrupt:
         reporter.warn('interrupted')
         return EXIT_INTERRUPTED
-    except Aborted:
-        reporter.warn('stopped')
+    except (Aborted,) + tuple(aborts) as exc:
+        reporter.warn('stopped: {}'.format(exc) if str(exc) else 'stopped')
         return EXIT_INTERRUPTED
     except NoDevice as exc:
         reporter.warn(str(exc))
         return EXIT_NO_DEVICE
     except (ops.OperationError, config_csv.ConfigError,
-            _calibrate.CalibrationError, FileNotFoundError) as exc:
+            _calibrate.CalibrationError, FileNotFoundError) + tuple(failures) as exc:
         reporter.warn(str(exc))
         return EXIT_FAILED
     finally:
@@ -191,7 +217,7 @@ def _cmd_scan(ctx):
     return EXIT_OK if nodes else EXIT_NO_DEVICE
 
 
-def _targets(ctx):
+def targets(ctx):
     """--all: every puck; else the resolved node."""
     if getattr(ctx.args, 'all', False):
         found = ctx.session.found_ids or ctx.session.scan()
@@ -203,7 +229,7 @@ def _targets(ctx):
 
 def _cmd_info(ctx):
     results = []
-    for node_id in _targets(ctx):
+    for node_id in targets(ctx):
         results.append(ops.info(ctx.session, node_id,
                                 flashloader=ctx.args.flashloader,
                                 reporter=ctx.reporter))
@@ -212,13 +238,13 @@ def _cmd_info(ctx):
 
 
 def _cmd_flash(ctx):
-    for node_id in _targets(ctx):
+    for node_id in targets(ctx):
         ops.flash(ctx.session, node_id, ctx.args.firmware, ctx.reporter)
 
 
 def _cmd_config_load(ctx):
     failed = False
-    for node_id in _targets(ctx):
+    for node_id in targets(ctx):
         result = ops.load_config(ctx.session, node_id, ctx.args.csv,
                                  ctx.reporter, save=not ctx.args.no_save,
                                  reboot=not ctx.args.no_reboot,
@@ -260,7 +286,7 @@ def _cmd_set_id(ctx):
 
 
 def _cmd_reset(ctx):
-    for node_id in _targets(ctx):
+    for node_id in targets(ctx):
         ops.reset(ctx.session, node_id, ctx.reporter)
 
 
@@ -276,7 +302,7 @@ def _cmd_calibrate(ctx):
             'encoder zero). Is the motor free to turn?', default=True):
         return EXIT_FAILED
     results = {}
-    for node_id in _targets(ctx):
+    for node_id in targets(ctx):
         results[node_id] = ops.calibrate(ctx.session, node_id, steps,
                                          ctx.reporter)
     if ctx.args.json:
