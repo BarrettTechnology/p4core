@@ -8,8 +8,10 @@
   ezero        the encoder-zero sweep
   ops          the shared operations, UI-free (the apps' controllers call these)
   reporter     how an operation reports progress and asks questions
+  cia402       ControlWord commands and ModesOfOperation values
   cli          argparse scaffolding and the shared subcommands
   wx_reporter  a Reporter for wx frames (imports wx; import it explicitly)
+  wx_splash    the start-up splash (imports wx; import it explicitly)
   app_settings per-user settings
   paths        package data and per-user directories
 
