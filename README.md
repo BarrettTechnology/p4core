@@ -11,6 +11,8 @@ Each app is split model / controller / view:
 * **controllers** — plain functions (`p4core.ops`, and each app's own
   `controllers` module) that take a Session, node IDs, options and a
   `Reporter`, and return results.  No printing, no dialogs.
+* **shared algorithms** — `tuning` (pucktuner's current / velocity /
+  position gain design and PWM selection), `ezero`, `calibrate`.
 * **views** — `cli` (argparse subcommands, `ConsoleReporter`) and the wx GUI
   (`WxReporter`), both calling the same controllers.
 
