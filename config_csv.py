@@ -16,6 +16,8 @@ pandas-based configtest.build_csv:
   load(node, path, ...)        parse + validate + apply
   build_from_template(node, template, out)
                                read the puck's values into a copy of a template
+  set_entry(path, index, sub, datatype, value)
+                               change one value in a CSV file in place
   remap_pdo_cob_ids(node, new_id, old_id)
                                the PDO part of a node-ID change
 """
@@ -479,6 +481,36 @@ def build_from_template(node, template, output, reporter=None, date=None):
         f.write('\n'.join(out_lines) + '\n')
     reporter.progress(100)
     return count
+
+
+def set_entry(path, index, sub, datatype, value, comment=''):
+    """Set the data of the (*index*, *sub*) row in the CSV at *path*, in place.
+
+    Every matching row is updated; if there is none, one is appended.  The
+    file is otherwise left exactly as it was.  Returns True if a row was
+    updated, False if one was appended.
+    """
+    with open(path, newline='') as f:
+        lines = f.read().splitlines()
+    found = False
+    for n, row in enumerate(parse(lines)):
+        if row.kind != 'entry' or len(row.fields) != 6 or row.command:
+            continue
+        if _int(row.index) == index and _int(row.subindex) == sub:
+            fields = list(row.fields)
+            fields[5] = str(value)
+            buf = []
+            csv.writer(_Collect(buf), lineterminator='').writerow(fields)
+            lines[n] = buf[0]
+            found = True
+    if not found:
+        buf = []
+        csv.writer(_Collect(buf), lineterminator='').writerow(
+            [comment, '', '0x{:04X}'.format(index), str(sub), datatype, str(value)])
+        lines.append(buf[0])
+    with open(path, 'w', newline='') as f:
+        f.write('\n'.join(lines) + '\n')
+    return found
 
 
 class _Collect:

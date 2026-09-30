@@ -143,6 +143,20 @@ class TestBuildFromTemplate(unittest.TestCase):
         self.assertEqual(config_csv._format('0x2000', 'UNSIGNED8', 0), '0')
 
 
+class TestSetEntry(unittest.TestCase):
+    def test_update_and_append(self):
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('# keep me\ni_cal,,0x3011,11,UNSIGNED16,1000\n')
+        try:
+            self.assertTrue(config_csv.set_entry(f.name, 0x3011, 11, 'UNSIGNED16', 1500))
+            self.assertFalse(config_csv.set_entry(f.name, 0x3011, 9, 'UNSIGNED16', 20000, 'i_peak'))
+            with open(f.name) as g:
+                self.assertEqual(g.read(), '# keep me\ni_cal,,0x3011,11,UNSIGNED16,1500\n'
+                                           'i_peak,,0x3011,9,UNSIGNED16,20000\n')
+        finally:
+            os.unlink(f.name)
+
+
 class TestRemap(unittest.TestCase):
     def test_remap_keeps_high_bits_and_saves(self):
         node = FakeNode(9)
