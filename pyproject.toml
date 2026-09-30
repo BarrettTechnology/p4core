@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p4core"
+version = "0.1.0"
+description = "Shared CANopen, flashing, configuration and calibration layer for the P4 puck tools"
+requires-python = ">=3.9"
+dependencies = [
+    "canopen>=2.2",
+    "python-can>=4.3",
+    "semver>=3",
+]
+
+[project.optional-dependencies]
+wx = ["wxPython>=4.2"]
+candlelight = ["pyusb", "libusb-package"]
+
+[tool.setuptools]
+# The repository root is the package, as in p4sysid.
+package-dir = {"p4core" = "."}
+packages = ["p4core"]
+
+[tool.setuptools.package-data]
+p4core = ["data/*.eds", "data/templates/*.csv"]

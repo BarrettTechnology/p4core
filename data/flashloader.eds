@@ -1,0 +1,874 @@
+; This EDS file was created by Barrett objdict-generate.py tool
+
+[FileInfo]
+FileName=flashloader_objdict.eds
+FileVersion=3
+FileRevision=0
+EDSVersion=1.0
+Description=Object Dictionary Entries for Flashloader Firmware
+CreationTime=11:35AM
+CreationDate=10-16-2006
+CreatedBy=
+ModificationTime=01:19PM
+ModificationDate=05-23-2008
+ModifiedBy=
+
+[DeviceInfo]
+VendorName=Barrett Technology
+VendorNumber=0x0408
+ProductName=flashloader_objdict
+RevisionNumber=0
+BaudRate_10=0
+BaudRate_20=0
+BaudRate_50=0
+BaudRate_125=0
+BaudRate_250=0
+BaudRate_500=0
+BaudRate_800=0
+BaudRate_1000=1
+DynamicChannelsSupported=0
+GroupMessaging=0
+LSS_Supported=1
+Granularity=0
+SimpleBootUpSlave=1
+SimpleBootUpMaster=0
+NrOfRXPDO=4
+NrOfTXPDO=4
+
+[Comments]
+Lines=0
+
+[DummyUsage]
+Dummy0001=0
+Dummy0002=0
+Dummy0003=0
+Dummy0004=0
+Dummy0005=0
+Dummy0006=0
+Dummy0007=0
+
+; The following sections are not yet implemented.
+;
+; [MandatoryObjects]
+; SupportedObjects=3
+; 1=0x1000
+; 2=0x1001
+;
+; [OptionalObjects]
+; SupportedObjects=1
+; 1=0x1010
+;
+; [ManufacturerObjects]
+; SupportedObjects=7
+; 1=0x21B0
+; 2=0x3100
+; 3=0x2000
+; 4=0x2001
+; 5=0x2002
+; 6=0x2003
+; 7=0x2004
+
+[1000]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = DeviceType
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 1026
+
+[1001]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = ErrorRegister
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1005]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = SyncCobId
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 128
+
+[1008]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = MfgDeviceName
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 1920098626
+
+[1009]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = MfgHardwareVersion
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 12879
+
+[100a]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = MfgSoftwareVersion
+AccessType = ro
+PDOMapping = 0
+
+[1010]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = StoreParameters
+AccessType = rw
+
+[1010sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 1
+
+[1010sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = SaveAll
+AccessType = wo
+PDOMapping = 0
+DefaultValue = 1
+
+[1014]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = CobIdEmcy
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 143
+
+[1015]
+ObjectType = 0x07
+DataType = 0x06
+ParameterName = InhibitTimeEmcy
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 50
+
+[1017]
+ObjectType = 0x07
+DataType = 0x03
+ParameterName = HearbeatTime
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1018]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = Identity
+AccessType = ro
+
+[1018sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 2
+
+[1018sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = VendorId
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 1032
+
+[1018sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = ProductCode
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 1179402579
+
+[1200]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = SDOParameters
+AccessType = ro
+
+[1200sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 2
+
+[1200sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = RxCobId
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 1536
+
+[1200sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = TxCobId
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 1408
+
+[1400]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = RPDO1Parameters
+AccessType = ro
+
+[1400sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 2
+
+[1400sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = CobId
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 639
+
+[1400sub2]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = RxType
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 255
+
+[1600]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = RPDO1Mapping
+AccessType = rw
+
+[1600sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1600sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = 1
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1600sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = 2
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1600sub3]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = 3
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1600sub4]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = 4
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[1f80]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = NMTStartup
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[21b0]
+ObjectType = 0x07
+DataType = 0x06
+ParameterName = NodeId
+AccessType = rw
+PDOMapping = 0
+
+[2384]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = PuckSpecific
+AccessType = rw
+
+
+[2384sub18]
+ObjectType = 0x07
+DataType = 0x03
+ParameterName = FirmwareVersion
+AccessType = ro
+PDOMapping = 0
+
+[3010]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = GitHash
+AccessType = ro
+
+[3010sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 7
+
+[3010sub1]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 1
+AccessType = ro
+PDOMapping = 0
+
+[3010sub2]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 2
+AccessType = ro
+PDOMapping = 0
+
+[3010sub3]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 3
+AccessType = ro
+PDOMapping = 0
+
+[3010sub4]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 4
+AccessType = ro
+PDOMapping = 0
+
+[3010sub5]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 5
+AccessType = ro
+PDOMapping = 0
+
+[3010sub6]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 6
+AccessType = ro
+PDOMapping = 0
+
+[3010sub7]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 7
+AccessType = ro
+PDOMapping = 0
+
+[3400]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = FlashInfo
+AccessType = ro
+
+[3400sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 4
+
+[3400sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = BlockBase
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3400sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = TotalSize
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3400sub3]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = SectorSize
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3400sub4]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = SecurityStatus
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3410]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = ProgramInfo
+AccessType = ro
+
+[3410sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 9
+
+[3410sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = StartingAddress
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 40960
+
+[3410sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = MaxSize
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub3]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = Size
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub4]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = IsEncrypted
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub5]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = CRC32
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub6]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = IsValid
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub7]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = ErrorCode
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3410sub8]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = StartTimeoutMs
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 100
+
+[3410sub9]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = AutoLaunch
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3411]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = ProgramCommand
+AccessType = ro
+
+[3411sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 3
+
+[3411sub1]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = Command
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3411sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = Word
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3411sub3]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = Index
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3413]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = FlashRead
+AccessType = ro
+
+[3413sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 2
+
+[3413sub1]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = Address
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3413sub2]
+ObjectType = 0x07
+DataType = 0x07
+ParameterName = Word
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 0
+
+[3414]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = ProgramAesIv
+AccessType = ro
+
+[3414sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 16
+
+[3414sub1]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 1
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub2]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 2
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub3]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 3
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub4]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 4
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub5]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 5
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub6]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 6
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub7]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 7
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub8]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 8
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub9]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 9
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subA]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = A
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subB]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = B
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subC]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = C
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subD]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = D
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subE]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = E
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414subF]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = F
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3414sub10]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 10
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415]
+ObjectType = 0x08
+DataType = 0x05
+ParameterName = ProgramAesTag
+AccessType = ro
+
+[3415sub0]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = NumberOfEntries
+AccessType = ro
+PDOMapping = 0
+DefaultValue = 16
+
+[3415sub1]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 1
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub2]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 2
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub3]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 3
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub4]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 4
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub5]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 5
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub6]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 6
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub7]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 7
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub8]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 8
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub9]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 9
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subA]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = A
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subB]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = B
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subC]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = C
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subD]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = D
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subE]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = E
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415subF]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = F
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
+
+[3415sub10]
+ObjectType = 0x07
+DataType = 0x05
+ParameterName = 10
+AccessType = rw
+PDOMapping = 0
+DefaultValue = 0
