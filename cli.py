@@ -26,6 +26,8 @@ import logging
 import os
 import sys
 
+from canopen.sdo.exceptions import SdoError
+
 from . import calibrate as _calibrate
 from . import config_csv, ops, paths
 from .reporter import Aborted, ConsoleReporter
@@ -199,6 +201,11 @@ def main(parser, argv=None, session_factory=Session, failures=(), aborts=()):
     except NoDevice as exc:
         reporter.warn(str(exc))
         return EXIT_NO_DEVICE
+    except SdoError as exc:
+        # An abort names the refusal (e.g. 0x08000022: wrong drive state);
+        # a traceback would bury it.
+        reporter.warn('SDO: {}'.format(exc))
+        return EXIT_FAILED
     except (ops.OperationError, config_csv.ConfigError,
             _calibrate.CalibrationError, FileNotFoundError) + tuple(failures) as exc:
         reporter.warn(str(exc))

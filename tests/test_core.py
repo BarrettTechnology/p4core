@@ -1,3 +1,4 @@
+import contextlib
 import io
 import math
 import os
@@ -313,6 +314,22 @@ class TestCli(unittest.TestCase):
         code = cli.main(self.parser(), ['-y', 'calibrate', 'bogus'],
                         session_factory=lambda: session)
         self.assertEqual(code, cli.EXIT_USAGE)
+
+    def test_an_sdo_abort_is_a_failure_not_a_traceback(self):
+        from canopen.sdo.exceptions import SdoAbortedError
+
+        def refuse(ctx):
+            raise SdoAbortedError(0x08000022)
+
+        parser, sub = cli.make_parser('t', 'test')
+        p = sub.add_parser('boom')
+        p.set_defaults(func=refuse)
+        session = FakeSession([TestOps().puck(5)])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(err):
+            code = cli.main(parser, ['boom'], session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_FAILED)
+        self.assertIn('0x08000022', err.getvalue())
 
 
 if __name__ == '__main__':
