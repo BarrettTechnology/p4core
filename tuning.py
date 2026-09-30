@@ -385,8 +385,9 @@ def write_position(node, kp):
 def design(params, control_gain=None, bandwidth_hz=None, user_pwm=0,
            override_backoff=False, log=None):
     """All three loops from read_params(): (CurrentTune, VelocityTune,
-    position Kp).  *control_gain*/*bandwidth_hz* override the stored ones;
-    the velocity bandwidth is designed when neither is set."""
+    position Kp).  *control_gain* overrides the stored one.  The velocity
+    bandwidth is designed unless *bandwidth_hz* is given: like the GUI's
+    Calculate, a stored bandwidth (params['bandwidth_hz']) is not reused."""
     cur = current_gains(
         params['resistance'], params['inductance'],
         control_gain=params['control_gain'] if control_gain is None else control_gain,
