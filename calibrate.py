@@ -17,6 +17,7 @@ import math
 import time
 
 from . import ezero
+from .flash import read_version
 from .reporter import Reporter
 
 
@@ -47,9 +48,8 @@ def save_single(node, index, sub):
 
 
 def firmware_version(node):
-    """MfgSoftwareVersion as a (major, minor, patch) tuple."""
-    raw = node.sdo['MfgSoftwareVersion'].raw
-    return (raw >> 24) & 0xFF, (raw >> 8) & 0xFFFF, raw & 0xFF
+    """0x100A as a (major, minor, patch) tuple, string or packed U32 (see read_version)."""
+    return tuple(int(x) for x in read_version(node).split('.')[:3])
 
 
 def bias_scale(node):

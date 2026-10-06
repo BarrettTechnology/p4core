@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from p4core import flash as flashp4  # noqa: E402
+from p4core import calibrate, flash as flashp4  # noqa: E402
 
 
 class _Node:
@@ -34,6 +34,20 @@ class ReadVersionTest(unittest.TestCase):
         packed = (4 << 24) | (300 << 8) | 2
         self.assertEqual(flashp4.read_version(_Node(packed.to_bytes(4, 'little'))),
                          '4.300.2')
+
+
+class FirmwareVersionTest(unittest.TestCase):
+    """calibrate.firmware_version() decodes both forms, so version gates
+    such as bias_scale() work on string-publishing applications."""
+
+    def test_string(self):
+        self.assertEqual(calibrate.firmware_version(_Node(b'4.4.0')), (4, 4, 0))
+        self.assertEqual(calibrate.bias_scale(_Node(b'4.4.0')), 16)
+
+    def test_packed_u32(self):
+        packed = (4 << 24) | (3 << 8) | 3
+        self.assertEqual(calibrate.firmware_version(_Node(packed.to_bytes(4, 'little'))), (4, 3, 3))
+        self.assertEqual(calibrate.bias_scale(_Node(packed.to_bytes(4, 'little'))), 1)
 
 
 if __name__ == '__main__':

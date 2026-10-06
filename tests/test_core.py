@@ -98,7 +98,7 @@ class SimPuck(FakeNode):
         self.stuck = stuck
         self.bias = bias
         for name, sub, value in [
-                ('MfgSoftwareVersion', None, (5 << 24)),
+                ('MfgSoftwareVersion', None, b'5.0.0'),
                 ('EncoderConfig', 'Resolution', self.RES),
                 ('Calibration', 'poles', self.POLES),
                 ('Calibration', 'i_peak', 10000),
