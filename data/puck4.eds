@@ -2922,14 +2922,14 @@ DefaultValue=0
 [3013]
 ParameterName=EncoderConfig
 ObjectType=0x09
-SubNumber=9
+SubNumber=10
 
 [3013sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=8
+DefaultValue=9
 
 [3013sub1]
 ParameterName=Resolution
@@ -2986,6 +2986,13 @@ ObjectType=0x07
 DataType=0x0005
 AccessType=ro
 DefaultValue=1
+
+[3013sub9]
+ParameterName=EncoderChipRegs
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
 
 [3015]
 ParameterName=CurrentInjection
@@ -3180,10 +3187,10 @@ AccessType=ro
 DefaultValue=0
 
 [3016sub7]
-ParameterName=DebugDemagVgovSpeedGovernorCap
+ParameterName=DebugIsenseTriggerOffset
 ObjectType=0x07
-DataType=0x0004
-AccessType=ro
+DataType=0x0003
+AccessType=rw
 DefaultValue=0
 
 [3016sub8]
