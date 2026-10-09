@@ -2793,14 +2793,14 @@ DefaultValue=0
 [3011]
 ParameterName=Calibration
 ObjectType=0x09
-SubNumber=13
+SubNumber=14
 
 [3011sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=12
+DefaultValue=13
 
 [3011sub1]
 ParameterName=e_zero
@@ -2881,6 +2881,13 @@ DefaultValue=0
 
 [3011subc]
 ParameterName=Lq
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[3011subd]
+ParameterName=Lhf
 ObjectType=0x07
 DataType=0x0006
 AccessType=rw
@@ -3215,7 +3222,7 @@ AccessType=rw
 DefaultValue=0
 
 [3016subb]
-ParameterName=DiagFwGainEngagementBandLo
+ParameterName=DbgWidestPulse
 ObjectType=0x07
 DataType=0x0006
 AccessType=ro
