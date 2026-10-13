@@ -4,11 +4,11 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=02:49PM
-CreationDate=10-07-2026
+CreationTime=10:38AM
+CreationDate=10-13-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=02:49PM
-ModificationDate=10-07-2026
+ModificationTime=10:38AM
+ModificationDate=10-13-2026
 ModifiedBy=scripts/gen_eds.py
 
 [DeviceInfo]
@@ -2198,14 +2198,14 @@ DefaultValue=0
 [3001]
 ParameterName=Amp
 ObjectType=0x09
-SubNumber=13
+SubNumber=15
 
 [3001sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=12
+DefaultValue=14
 
 [3001sub1]
 ParameterName=Frequency
@@ -2289,6 +2289,20 @@ ParameterName=DeadTimeCompRampWidth
 ObjectType=0x07
 DataType=0x0006
 AccessType=rw
+DefaultValue=0
+
+[3001subd]
+ParameterName=PwmPeriodsPerSlot
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+
+[3001sube]
+ParameterName=ControlRate
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
 DefaultValue=0
 
 [3002]
@@ -2929,14 +2943,14 @@ DefaultValue=0
 [3013]
 ParameterName=EncoderConfig
 ObjectType=0x09
-SubNumber=10
+SubNumber=11
 
 [3013sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=9
+DefaultValue=10
 
 [3013sub1]
 ParameterName=Resolution
@@ -2998,6 +3012,13 @@ DefaultValue=1
 ParameterName=EncoderChipRegs
 ObjectType=0x07
 DataType=0x0007
+AccessType=ro
+DefaultValue=0
+
+[3013suba]
+ParameterName=LatencyPipeline
+ObjectType=0x07
+DataType=0x0003
 AccessType=ro
 DefaultValue=0
 

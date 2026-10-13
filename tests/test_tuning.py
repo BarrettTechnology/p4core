@@ -39,7 +39,7 @@ class TestCurrentLoop(unittest.TestCase):
         _rdq, _ldq, tau = dq(0.2, 20e-6)
         natural = 1 / (tau * 2 * math.pi)
         t = tuning.current_gains(0.2, 20e-6, **QUIET)
-        self.assertEqual(t.control_rate, 100000 / 4)
+        self.assertEqual(t.control_rate, 80000 / 4)
         self.assertTrue(t.clamped)
         self.assertAlmostEqual(t.control_gain, tuning.MIN_CURRENT_GAIN)
         self.assertAlmostEqual(t.control_bw, 0.6 * natural)
@@ -51,7 +51,7 @@ class TestCurrentLoop(unittest.TestCase):
 
     def test_nyquist_wins_over_the_floor(self):
         t = tuning.current_gains(0.2, 5e-6, **QUIET)
-        self.assertAlmostEqual(t.control_bw, 0.4 * 25000 / 2)
+        self.assertAlmostEqual(t.control_bw, 0.4 * 20000 / 2)
         self.assertTrue(t.clamped)
         self.assertLess(t.control_gain, tuning.MIN_CURRENT_GAIN)
 

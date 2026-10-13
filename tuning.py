@@ -31,9 +31,13 @@ SATURATION_STABILITY_MARGIN = 25.0
 STABILITY_BACKOFF_MARGIN = 20.0
 #: Kp = (2 gain - 1) Rdq at zeta 1 dies at 0.5; the back-off stops here.
 MIN_CURRENT_GAIN = 0.6
-#: The hardware/firmware control-rate ceiling.
-MAX_OPERATING_PWM = 100000
-PWM_CANDIDATES = (16000, 32000, 40000, 60000, 80000, MAX_OPERATING_PWM)
+#: The fastest PWM that still runs the control cycle at a quarter of it. The
+#: firmware runs a case slot (one ISR) at no more than 80 kHz: a faster PWM
+#: spreads each slot over several periods (0x3001,13), so the control rate
+#: stops rising -- and since the design here is for the control rate, a faster
+#: PWM buys it nothing.
+MAX_OPERATING_PWM = 80000
+PWM_CANDIDATES = (16000, 32000, 40000, 60000, MAX_OPERATING_PWM)
 PATTERNS_PER_CYCLE = 4
 #: Effective L fraction seen by the current loop.
 PWM_FACTOR = 0.8
