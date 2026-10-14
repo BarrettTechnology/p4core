@@ -20,6 +20,8 @@ arguments to the step functions), after clear_slope().
 import math
 import time
 
+from canopen.sdo.exceptions import SdoAbortedError
+
 from . import ezero
 from .flash import read_version
 from .reporter import Reporter
@@ -464,18 +466,63 @@ def calibrate_ezero(node, reporter=None, steps=16):
     return r
 
 
+#: The user polarity: 0x607E (DS402) holds 0x00, or 0xC0 to invert position
+#: and velocity together.  Firmware before stm32 8a366c6 kept a +-1 sign at
+#: 0x3013,3 instead (0x607E was there, but unused).
+POLARITY = (0x607E, 0)
+POLARITY_INVERT = 0xC0
+LEGACY_POLARITY = (0x3013, 3)
+
+
+def has_legacy_polarity(node):
+    """True on firmware that still has 0x3013,3 (and ignores 0x607E)."""
+    try:
+        node.sdo.upload(*LEGACY_POLARITY)
+        return True
+    except SdoAbortedError:
+        return False
+
+
+def polarity_sign(raw):
+    """+1 or -1 from a 0x607E value (bit 7, the position bit, decides)."""
+    return -1 if raw & 0x80 else 1
+
+
+def read_user_polarity(node):
+    """The user sign, +1 or -1 (0 on old firmware never configured)."""
+    if has_legacy_polarity(node):
+        return int.from_bytes(node.sdo.upload(*LEGACY_POLARITY)[:1], 'little',
+                              signed=True)
+    return polarity_sign(node.sdo.upload(*POLARITY)[0])
+
+
+def write_user_polarity(node, sign, save=True):
+    """Set the user sign (+1 or -1) where this firmware keeps it, and save it."""
+    if sign not in (1, -1):
+        raise ValueError('user polarity is +1 or -1, not {}'.format(sign))
+    where = LEGACY_POLARITY if has_legacy_polarity(node) else POLARITY
+    if where == LEGACY_POLARITY:
+        node.sdo.download(*where, bytes([sign & 0xFF]))
+    else:
+        node.sdo.download(*where, bytes([POLARITY_INVERT if sign < 0 else 0]))
+    if save:
+        save_single(node, *where)
+    return where
+
+
 def set_user_direction(node, reporter=None, threshold=1 / 8.0, poll_s=1.0,
                        timeout_s=None):
     """The user turns the output by hand in the direction they call positive;
-    UserPolarity (0x3013,3) is set so that reads positive, and saved.
+    the user polarity (0x607E, or 0x3013,3 on older firmware) is set so that
+    reads positive, and saved.
 
-    Starts from UserPolarity = +1, waits until the position has moved more
+    Starts from +1 (0x607E = 0x00), waits until the position has moved more
     than *threshold* of a revolution, then keeps +1 if it moved up, else
-    writes -1.  *timeout_s* None waits until moved or aborted."""
+    writes -1 (0xC0).  *timeout_s* None waits until moved or aborted."""
     reporter = reporter or Reporter()
     sdo = node.sdo
-    previous = sdo['EncoderConfig']['UserPolarity'].raw
-    sdo['EncoderConfig']['UserPolarity'].raw = 1
+    previous = read_user_polarity(node)
+    write_user_polarity(node, 1, save=False)
     res = sdo['EncoderConfig']['Resolution'].raw
     start = sdo['PositionFeedback'].raw
     reporter.status('Please turn the motor in the positive (+) direction...')
@@ -486,14 +533,14 @@ def set_user_direction(node, reporter=None, threshold=1 / 8.0, poll_s=1.0,
         if abs(moved) > res * threshold:
             break
         if timeout_s is not None and time.monotonic() - t0 > timeout_s:
-            sdo['EncoderConfig']['UserPolarity'].raw = previous
+            if previous in (1, -1):
+                write_user_polarity(node, previous, save=False)
             raise CalibrationError('the motor did not turn ({} counts); '
                                    'user direction unchanged'.format(moved))
     polarity = 1 if moved > 0 else -1
-    sdo['EncoderConfig']['UserPolarity'].raw = polarity
-    save_single(node, 0x3013, 3)
-    reporter.note('User direction: UserPolarity {:+d} (was {:+d}), moved {} '
-                  'counts'.format(polarity, previous, moved))
+    where = write_user_polarity(node, polarity)
+    reporter.note('User direction: user polarity {:+d} (was {:+d}) in 0x{:04X},{}, '
+                  'moved {} counts'.format(polarity, previous, where[0], where[1], moved))
     return dict(user_polarity=polarity, previous=previous, moved=moved)
 
 

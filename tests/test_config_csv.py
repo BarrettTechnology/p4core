@@ -86,6 +86,29 @@ class TestApply(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertIn('0x06010002', result.errors[0])
 
+    def test_legacy_polarity_row_goes_to_607e(self):
+        """An old CSV's 0x3013,3 row: firmware without it gets 0x607E."""
+        for data, want in (('0xFF', 0xC0), ('1', 0x00)):
+            node = FakeNode(5)
+            node.readonly.add((0x3013, 3))    # refused, as the new firmware does
+            rep = RecordingReporter()
+            result = config_csv.apply(node, rows(
+                'Encoder user polarity,,0x3013,3,UNSIGNED8,' + data), reporter=rep)
+            self.assertTrue(result.ok, result.errors)
+            self.assertEqual(node.values[(0x607E, 0)], want)
+            self.assertTrue(any('0x607E' in t for t in rep.texts('note')))
+
+    def test_legacy_polarity_row_on_legacy_firmware(self):
+        node = FakeNode(5)
+        result = config_csv.apply(node, rows(
+            'Encoder user polarity,,0x3013,3,UNSIGNED8,0xFF'))
+        self.assertTrue(result.ok)
+        self.assertNotIn((0x607E, 0), node.values)
+
+    def test_legacy_polarity_row_validates(self):
+        self.assertEqual(config_csv.validate(
+            rows('x,,0x3013,3,UNSIGNED8,1'), 5, fake.od()), ([], []))
+
     def test_load_refuses_invalid(self):
         with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
             f.write('x,,0x2000,1,UNSIGNED8,999\n')

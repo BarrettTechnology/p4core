@@ -87,6 +87,18 @@ MESSAGES = {
 #: so its missing response is expected.
 NODE_ID_OBJECT = (0x21B0, 0)
 
+#: The user polarity was a +-1 sign at 0x3013,3 until firmware stm32 8a366c6
+#: replaced it with 0x607E (DS402: 0x00, or 0xC0 to invert).  An older CSV's
+#: 0x3013,3 row still loads: a drive that refuses it gets the same direction
+#: written to 0x607E instead.
+LEGACY_POLARITY = (0x3013, 3)
+POLARITY = (0x607E, 0)
+
+
+def legacy_polarity_data(data):
+    """0x607E's byte for a 0x3013,3 sign: 0xC0 for -1, else 0x00."""
+    return bytes([0xC0 if data[:1] == b'\xff' else 0x00])
+
 
 class Row:
     """One CSV line.  ``kind`` is 'comment', 'blank' or 'entry'."""
@@ -261,7 +273,7 @@ def validate(rows, node_id=None, od=None):
             if a is None or b is None:
                 errors.append((row.line, 5))
                 continue
-            if od is not None:
+            if od is not None and (a, b) != LEGACY_POLARITY:
                 try:
                     obj = od[a]
                     if b:
@@ -378,6 +390,16 @@ def apply(node, rows, node_id=None, reporter=None):
                     result.errors.append('{}: no SDO response (0x{:04X},{})'
                                          .format(where, index, sub))
                 except SdoAbortedError as exc:
+                    if (index, sub) == LEGACY_POLARITY:
+                        polarity = legacy_polarity_data(data)
+                        try:
+                            node.sdo.download(*POLARITY, polarity)
+                            result.written += 1
+                            reporter.note('{}: 0x3013,3 is 0x607E on this firmware: '
+                                          'wrote 0x{:02X}'.format(where, polarity[0]))
+                            continue
+                        except (SdoAbortedError, SdoCommunicationError):
+                            pass
                     result.errors.append(
                         '{}: SDO abort 0x{:08X} on 0x{:04X},{} ({})'.format(
                             where, exc.code, index, sub, row.comment))

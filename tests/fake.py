@@ -78,7 +78,10 @@ class FakeSdo:
         return entry
 
     def upload(self, index, sub):
-        entry = self._entry(index, sub)
+        try:
+            entry = self._entry(index, sub)
+        except KeyError:    # not in the EDS: answers only from raw bytes
+            entry = None
         value = self.read((index, sub))
         if isinstance(value, (bytes, bytearray)):
             return bytes(value)

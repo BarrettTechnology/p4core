@@ -292,34 +292,54 @@ class TestCalibrateMenuSettings(unittest.TestCase):
 
 
 class TestUserDirection(unittest.TestCase):
-    def puck(self, path):
+    """0x607E (DS402) on current firmware, 0x3013,3 on older firmware."""
+
+    def puck(self, path, legacy=False):
         puck = FakeNode(5)
-        puck.set('EncoderConfig', 'UserPolarity', -1)
+        if legacy:
+            puck.values[(0x3013, 3)] = b'\xff'
+        puck.values[(0x607E, 0)] = 0xC0
         puck.set('EncoderConfig', 'Resolution', 4096)
         puck.set('Save', 'Single', 0)
         it = iter(path)
         puck.hook_read('PositionFeedback', None, lambda: next(it))
         return puck
 
+    def saves(self, puck):
+        return [v for k, v in puck.writes if k == puck.key('Save', 'Single')]
+
     def test_turned_negative(self):
         puck = self.puck([1000, 990, 400])
         res = calibrate.set_user_direction(puck, quick(RecordingReporter()))
-        self.assertEqual(res['user_polarity'], -1)
-        self.assertEqual(puck.get('EncoderConfig', 'UserPolarity'), -1)
-        self.assertIn(((0x3013 << 8) | 3),
-                      [v for k, v in puck.writes if k == puck.key('Save', 'Single')])
+        self.assertEqual((res['user_polarity'], res['previous']), (-1, -1))
+        self.assertEqual(puck.values[(0x607E, 0)], 0xC0)
+        self.assertEqual(self.saves(puck), [0x607E << 8])
 
     def test_turned_positive(self):
-        res = calibrate.set_user_direction(self.puck([0, 600]),
-                                           quick(RecordingReporter()))
+        puck = self.puck([0, 600])
+        res = calibrate.set_user_direction(puck, quick(RecordingReporter()))
         self.assertEqual(res['user_polarity'], 1)
+        self.assertEqual(puck.values[(0x607E, 0)], 0)
 
     def test_timeout_restores(self):
         puck = self.puck([0] * 100)
         with self.assertRaises(calibrate.CalibrationError):
             calibrate.set_user_direction(puck, quick(RecordingReporter()),
                                          poll_s=0, timeout_s=-1)
-        self.assertEqual(puck.get('EncoderConfig', 'UserPolarity'), -1)
+        self.assertEqual(puck.values[(0x607E, 0)], 0xC0)
+        self.assertEqual(self.saves(puck), [])
+
+    def test_legacy_firmware_uses_3013_3(self):
+        puck = self.puck([0, 600], legacy=True)
+        res = calibrate.set_user_direction(puck, quick(RecordingReporter()))
+        self.assertEqual((res['user_polarity'], res['previous']), (1, -1))
+        self.assertEqual(puck.values[(0x3013, 3)], b'\x01')
+        self.assertEqual(puck.values[(0x607E, 0)], 0xC0)    # untouched
+        self.assertEqual(self.saves(puck), [(0x3013 << 8) | 3])
+
+    def test_polarity_sign(self):
+        self.assertEqual([calibrate.polarity_sign(v) for v in (0, 0xC0, 0x80)],
+                         [1, -1, -1])
 
 
 class FakeSession:

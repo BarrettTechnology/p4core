@@ -186,4 +186,4 @@ Encoder lag factor,,0x3013,5,UNSIGNED16,0
 Encoder hardware filter,,0x3013,6,UNSIGNED8,0xA0 # MA782 = 0x30; MA736 = 0xA0
 
 #Electrical polarity,,0x3011,2,UNSIGNED8,0xFF
-Encoder user polarity,,0x3013,3,UNSIGNED8,0x01
+User polarity (0xC0 inverts),,0x607E,0,UNSIGNED8,0x00
