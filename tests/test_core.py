@@ -224,14 +224,31 @@ class TestCalibrateMenuSettings(unittest.TestCase):
         self.assertEqual(puck.get('Motor', 'uq'), 0)
         self.assertIn('previous_alpha_bias', res)
 
-    def test_bias_band_is_five_percent(self):
-        # 4 % off: outside p4gui's 3 % band, inside the menu's 5 %.
-        puck = SimPuck(bias=(int(2048 * 1.04 * 16), 2048 * 16))
-        with self.assertRaises(calibrate.CalibrationDeclined):
-            calibrate.calibrate_bias(puck, quick(RecordingReporter(answers=[False])))
-        res = calibrate.calibrate_bias(SimPuck(bias=(int(2048 * 1.04 * 16), 2048 * 16)),
-                                       quick(RecordingReporter()), **calibrate.BIAS_MENU)
-        self.assertTrue(res['ok'])
+    def test_bias_band_is_the_firmware_window(self):
+        # 101 counts off: outside the firmware's +-100, for both settings.
+        for kw in ({}, calibrate.BIAS_MENU):
+            puck = SimPuck(bias=((2048 + 101) * 16, 2048 * 16))
+            with self.assertRaises(calibrate.CalibrationDeclined):
+                calibrate.calibrate_bias(
+                    puck, quick(RecordingReporter(answers=[False])), **kw)
+            res = calibrate.calibrate_bias(SimPuck(bias=((2048 + 99) * 16, 2048 * 16)),
+                                           quick(RecordingReporter()), **kw)
+            self.assertTrue(res['ok'])
+
+    def test_isense_window(self):
+        puck = SimPuck()
+        puck.set('Alpha', 'Bias', 2048 * 16)
+        puck.set('Beta', 'Bias', (2048 + 100) * 16)
+        puck.set('Alpha', 'Gainfactor', 4096)
+        puck.set('Beta', 'Gainfactor', 4096 + 200)
+        self.assertEqual(calibrate.isense_window(puck), (True, []))
+        puck.set('Beta', 'Gainfactor', 0)          # an erased board
+        ok, problems = calibrate.isense_window(puck)
+        self.assertFalse(ok)
+        self.assertIn('beta gain factor 0', problems[0])
+        puck.set('Beta', 'Gainfactor', 4096)
+        puck.set('Alpha', 'Bias', (2048 - 101) * 16)
+        self.assertFalse(calibrate.isense_window(puck)[0])
 
     def test_gain_newton_ramp(self):
         puck = SimPuck()

@@ -32,9 +32,14 @@ MODE_PHASE_VOLTAGE_ANGLE = 12
 
 GAIN_FIT_STEPS = 48         # one electrical revolution
 GAIN_NOMINAL = 4096
-GAIN_TOLERANCE = 0.10
 BIAS_MIDPOINT = 2048        # ADC counts
-BIAS_TOLERANCE = 0.03
+#: The firmware's current-sense window (stm32 app/mode_switch.h): outside it,
+#: every closed-loop mode and R/L injection is refused, and a running one
+#: faults.  Bias +-100 ADC counts about mid-scale, gain factor +-200 about 1.0.
+BIAS_WINDOW_COUNTS = 100
+GAIN_WINDOW = 200
+BIAS_TOLERANCE = BIAS_WINDOW_COUNTS / float(BIAS_MIDPOINT)
+GAIN_TOLERANCE = GAIN_WINDOW / float(GAIN_NOMINAL)
 ENCODER_MAX_JITTER = 8      # counts over a second at rest
 
 #: ud step and ceiling for the calibration current ramp, and settle per step.
@@ -50,13 +55,15 @@ NEWTON_FIRST_STEP = RAMP_UD_MAX // 12
 NEWTON_SETTLE_S = 0.05
 
 #: puckutility's calibrate menu settings for the steps.  Bias: a shorter
-#: fixed settle, then a 100-sample average for sub-count precision, 5 % band.
+#: fixed settle, then a 100-sample average for sub-count precision, in the
+#: firmware's window.
 #: Convergence polling was abandoned: the ADC's noise floor exceeds any
 #: practical threshold for variance-based settling.  The mean converges much
 #: faster than the noise floor; 0.5 s is 5-10x the firmware filter time
 #: constant.  QUICK trims it to 0.35 s (still 3.5-7x): this is the 0 A
 #: reference every later step subtracts, so it is not trimmed hard.
-BIAS_MENU = dict(settle_s=0.5, samples=100, sample_dwell_s=0.0, tolerance=0.05)
+BIAS_MENU = dict(settle_s=0.5, samples=100, sample_dwell_s=0.0,
+                 tolerance=BIAS_TOLERANCE)
 BIAS_MENU_QUICK = dict(BIAS_MENU, settle_s=0.35)
 #: Gain: the proportional ramp, sampling straight after it.
 GAIN_MENU = dict(newton_ramp=True, post_ramp_s=0.0)
@@ -118,6 +125,31 @@ def read_values(node):
         e_polarity=node.sdo['Calibration']['e_polarity'].raw,
         i_cal=node.sdo['Calibration']['i_cal'].raw,
     )
+
+
+def isense_window(node):
+    """The stored current-sense calibration against the firmware's window.
+
+    Returns (ok, problems): *problems* names each channel's bias or gain
+    factor outside it.  Firmware refuses closed-loop current (any mode but
+    IDLE and phase-voltage, and every R/L injection) until both channels are
+    inside; an erased board's gain factor is 0, which reads 0 A whatever
+    flows."""
+    sdo = node.sdo
+    problems = []
+    for ch in ('alpha', 'beta'):
+        bias = sdo[ch.capitalize()]['Bias'].raw
+        gain = sdo[ch.capitalize()]['Gainfactor'].raw
+        # Q12.4 (firmware 4.4.0 on) puts mid-scale at 32768, whole counts
+        # (before) at 2048: the value says which without asking the version.
+        bias = bias / 16.0 if bias >= 2 * BIAS_MIDPOINT else float(bias)
+        if abs(bias - BIAS_MIDPOINT) > BIAS_WINDOW_COUNTS:
+            problems.append('{} bias {:.1f} (window {} +-{})'.format(
+                ch, bias, BIAS_MIDPOINT, BIAS_WINDOW_COUNTS))
+        if abs(gain - GAIN_NOMINAL) > GAIN_WINDOW:
+            problems.append('{} gain factor {} (window {} +-{})'.format(
+                ch, gain, GAIN_NOMINAL, GAIN_WINDOW))
+    return not problems, problems
 
 
 def _enable(sdo):
@@ -237,8 +269,9 @@ def _continue_or_raise(reporter, message, default=False):
 # ---------------------------------------------------------------------------
 # Steps
 # ---------------------------------------------------------------------------
-def test_encoder(node, reporter=None):
-    """Encoder stability at rest: position spread over one second."""
+def test_encoder(node, reporter=None, limit=ENCODER_MAX_JITTER):
+    """Encoder stability at rest: position spread over one second, against
+    *limit* counts (p4sysid.encfilter sets one by sensor and filter)."""
     reporter = reporter or Reporter()
     reporter.status('Testing encoder...')
     node.sdo['SetModeOfOperation'].raw = MODE_IDLE
@@ -249,12 +282,12 @@ def test_encoder(node, reporter=None):
         reporter.check_abort()
         positions.append(node.sdo['PositionFeedback'].raw)
     spread = max(positions) - min(positions) if positions else 0
-    result = dict(spread=spread, limit=ENCODER_MAX_JITTER, ok=spread <= ENCODER_MAX_JITTER)
+    result = dict(spread=spread, limit=limit, ok=spread <= limit)
     reporter.note('Encoder spread at rest: {} counts (limit {})'.format(
-        spread, ENCODER_MAX_JITTER))
+        spread, limit))
     if not result['ok']:
         _continue_or_raise(reporter, 'Encoder readings unstable: {} counts '
-                           '(limit {}).'.format(spread, ENCODER_MAX_JITTER))
+                           '(limit {}).'.format(spread, limit))
     return result
 
 
@@ -314,7 +347,8 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
                       a_bias, previous[0], b_bias, previous[1], samples))
     if not ok:
         _continue_or_raise(reporter, 'Current-sense bias out of bounds: alpha '
-                           '{:.1f}, beta {:.1f} counts (acceptable {:.0f} - {:.0f}).'
+                           '{:.1f}, beta {:.1f} counts (acceptable {:.0f} - {:.0f}; '
+                           'the drive refuses closed-loop current outside it).'
                            '\n\n{}'.format(a_bias, b_bias, lo, hi, _DEBUG_HINTS))
     return dict(alpha_bias=a_bias, beta_bias=b_bias, previous_alpha_bias=previous[0],
                 previous_beta_bias=previous[1], ok=ok)
@@ -397,7 +431,8 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     ok = lo <= gainfactor <= hi
     # Bounds before the write, so a rejected value never reaches the OD.
     if not ok and not reporter.confirm(
-            'Beta gain factor {} is out of bounds ({} - {}).\n\n{}\n\n'
+            'Beta gain factor {} is out of bounds ({} - {}; the drive refuses '
+            'closed-loop current outside it).\n\n{}\n\n'
             'Store it anyway?'.format(gainfactor, lo, hi, _DEBUG_HINTS)):
         restore()
         raise CalibrationDeclined('Beta gain factor {} out of bounds; not stored'
