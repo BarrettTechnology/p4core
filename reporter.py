@@ -3,7 +3,7 @@
 Every long operation in p4core and in the apps takes a Reporter instead of
 reaching for a status bar, a progress gauge, a dialog or ``wx.Yield``.  The
 command line hands it a ConsoleReporter; the GUI hands it a WxReporter
-(p4core.wx_reporter), which marshals each call onto the GUI thread.  The
+(in the app's gui package), which marshals each call onto the GUI thread.  The
 operation neither knows nor cares which.
 
 The interface is small on purpose:

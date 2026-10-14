@@ -11,6 +11,10 @@ Order matters (calibrate_all): bias needs nothing; gain subtracts the
 biases; the encoder zero's ramp watches Motor/id, which is downstream of
 both, and needs Calibration.poles.  Each step is followed by deenergise(), so
 no step starts with current left flowing by the one before.
+
+puckutility's calibrate menu runs the same steps with its own settings:
+BIAS_MENU / BIAS_MENU_QUICK, GAIN_MENU and EZERO_QUICK_STEPS (keyword
+arguments to the step functions), after clear_slope().
 """
 
 import math
@@ -37,10 +41,39 @@ RAMP_UD_MAX = 32000
 RAMP_SETTLE_S = 0.05
 #: Per-mille of i_peak at which the exported id is taken as saturated.
 RAMP_ID_SATURATED = 1000
+#: The proportional ramp (newton=True): per-step ud bounds, first step, settle.
+NEWTON_STEP_MIN = 100
+NEWTON_STEP_MAX = 2000
+NEWTON_FIRST_STEP = RAMP_UD_MAX // 12
+NEWTON_SETTLE_S = 0.05
+
+#: puckutility's calibrate menu settings for the steps.  Bias: a shorter
+#: fixed settle, then a 100-sample average for sub-count precision, 5 % band.
+#: Convergence polling was abandoned: the ADC's noise floor exceeds any
+#: practical threshold for variance-based settling.  The mean converges much
+#: faster than the noise floor; 0.5 s is 5-10x the firmware filter time
+#: constant.  QUICK trims it to 0.35 s (still 3.5-7x): this is the 0 A
+#: reference every later step subtracts, so it is not trimmed hard.
+BIAS_MENU = dict(settle_s=0.5, samples=100, sample_dwell_s=0.0, tolerance=0.05)
+BIAS_MENU_QUICK = dict(BIAS_MENU, settle_s=0.35)
+#: Gain: the proportional ramp, sampling straight after it.
+GAIN_MENU = dict(newton_ramp=True, post_ramp_s=0.0)
+#: Encoder zero, quick: 8 steps per electrical cycle instead of 16, about
+#: twice as fast, within ~1 deg electrical on a P4-42.
+EZERO_QUICK_STEPS = 8
+
+#: Shown with an out-of-bounds bias or gain.
+_DEBUG_HINTS = ('Debugging steps:\n'
+                '- Ensure the proper configuration file has been loaded\n'
+                '- Verify the phase leads are properly connected')
 
 
 class CalibrationError(RuntimeError):
     """A calibration step failed, or the user declined to continue."""
+
+
+class CalibrationDeclined(CalibrationError):
+    """The user answered no to continuing past an out-of-bounds result."""
 
 
 def save_single(node, index, sub):
@@ -92,13 +125,36 @@ def _enable(sdo):
     sdo['ControlWord'].raw = 0x0F
 
 
-def _read_filtered(node, channel, samples=16, sleep=time.sleep):
-    """Average of fresh reads of the Q12.4 filtered ADC value."""
-    total = 0
-    for _ in range(samples):
-        total += node.sdo[channel]['Filtered'].raw
-        sleep(0.005)
-    return total / float(samples)
+def _read_filtered(node, samples=16, dwell_s=0.005, sleep=time.sleep,
+                   progress=None):
+    """Averages {'Alpha', 'Beta'} of fresh reads of the Q12.4 filtered ADC
+    values, the two channels read in turn."""
+    total = {'Alpha': 0, 'Beta': 0}
+    for i in range(samples):
+        if progress:
+            progress(i / float(samples))
+        for channel in ('Alpha', 'Beta'):
+            total[channel] += node.sdo[channel]['Filtered'].raw
+        if dwell_s:
+            sleep(dwell_s)
+    return {k: v / float(samples) for k, v in total.items()}
+
+
+def clear_slope(node):
+    """Switch off the Current Sense Slope (0x3008/0x3009,7) and save.
+
+    It distorts the raw alpha/beta current, so bias, gain and the encoder
+    zero must run without it: a stale or garbage slope poisons the gain
+    (alpha reads about half, "Beta Gainfactor out of bounds") and the whole
+    calibration cascades.  The slope calibration re-measures and re-stores
+    it.  Errors are ignored (older firmware has no slope)."""
+    try:
+        node.sdo[0x3008][7].raw = 0
+        node.sdo[0x3009][7].raw = 0
+        save_single(node, 0x3008, 7)
+        save_single(node, 0x3009, 7)
+    except Exception:
+        pass
 
 
 def calibration_current(node):
@@ -107,48 +163,73 @@ def calibration_current(node):
     return min(sdo['Calibration']['i_cal'].raw, sdo['Calibration']['i_peak'].raw)
 
 
-def ramp_to_calibration_current(node, reporter=None):
+def ramp_to_calibration_current(node, reporter=None, newton=False,
+                                 progress=None):
     """Raise ud until the d-axis current reaches i_cal.  Returns that ud.
 
     Apply, then measure: measured first, a back-to-back run (calibrate_all)
     sees the previous step's current still decaying, exits at ud = 0 and
     calibrates against a rotor that never moved.
+
+    *newton* (puckutility's ramp) sizes each step from the current so far,
+    a quarter of the way to the ud that would give i_cal, between
+    NEWTON_STEP_MIN and NEWTON_STEP_MAX.  The cap matters: a falsely low
+    reading used to slam ud to the ceiling in one jump, which drives a small
+    motor into overcurrent and pushes the PWM to near-full duty, where the
+    bottom-shunt current sense cannot sample.  *progress(fraction of i_cal)*
+    is called on every step.
     """
     reporter = reporter or Reporter()
     sdo = node.sdo
     target = calibration_current(node)
     i_peak = sdo['Calibration']['i_peak'].raw
     ud = 0
+    i_ma = 0.0
     while ud < RAMP_UD_MAX:
-        ud += RAMP_UD_STEP
+        if not newton:
+            step = RAMP_UD_STEP
+        elif ud > 0 and i_ma > 0:
+            step = max(NEWTON_STEP_MIN, min(NEWTON_STEP_MAX,
+                       int((ud * target / i_ma - ud) / 4)))
+        else:
+            step = NEWTON_FIRST_STEP
+        ud = min(ud + step, RAMP_UD_MAX)
         sdo['Motor']['ud'].raw = ud
-        reporter.sleep(RAMP_SETTLE_S)
+        reporter.sleep(NEWTON_SETTLE_S if newton else RAMP_SETTLE_S)
         i_d = sdo['Motor']['id'].raw
-        if i_d >= RAMP_ID_SATURATED or i_d / 1000.0 * i_peak >= target:
+        i_ma = i_d / 1000.0 * i_peak
+        if progress and target > 0:
+            progress(min(1.0, max(0.0, i_ma / target)))
+        if i_d >= RAMP_ID_SATURATED or i_ma >= target:
             break
     return ud
 
 
-def deenergise(node, settle_s=1.0, sleep=time.sleep):
+def deenergise(node, settle_s=1.0, sleep=time.sleep, clear_fault=False):
     """Drop ud/uq to zero, go IDLE, and let Motor/id follow it down.
 
     The exported current is low-passed at a cutoff from rt/lt; a second
     covers every puck.  Never raises: it is what runs on the way out.
+    *clear_fault* also writes CLEAR_FAULT, ready for the next step.
     """
-    for write in (lambda: setattr(node.sdo['Motor']['ud'], 'raw', 0),
-                  lambda: setattr(node.sdo['Motor']['uq'], 'raw', 0),
-                  lambda: setattr(node.sdo['SetModeOfOperation'], 'raw',
-                                  MODE_IDLE)):
+    writes = [lambda: setattr(node.sdo['Motor']['ud'], 'raw', 0),
+              lambda: setattr(node.sdo['Motor']['uq'], 'raw', 0),
+              lambda: setattr(node.sdo['SetModeOfOperation'], 'raw',
+                              MODE_IDLE)]
+    if clear_fault:
+        writes.append(lambda: setattr(node.sdo['ControlWord'], 'raw', 0x80))
+    for write in writes:
         try:
             write()
         except Exception:
             pass
-    sleep(settle_s)
+    if settle_s:
+        sleep(settle_s)
 
 
 def _continue_or_raise(reporter, message, default=False):
     if not reporter.confirm(message + '\n\nContinue anyway?', default):
-        raise CalibrationError(message)
+        raise CalibrationDeclined(message)
 
 
 # ---------------------------------------------------------------------------
@@ -175,23 +256,44 @@ def test_encoder(node, reporter=None):
     return result
 
 
-def calibrate_bias(node, reporter=None):
-    """Current-sense bias (Alpha/Beta Bias, 0x3008/0x3009,3), zero current."""
+def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
+                   sample_dwell_s=0.005, tolerance=BIAS_TOLERANCE):
+    """Current-sense bias (Alpha/Beta Bias, 0x3008/0x3009,3), zero current.
+
+    Holds the bridge at ud = uq = 0 in phase-voltage-angle mode for
+    *settle_s* (a fixed settle), then averages *samples* reads of both
+    filtered channels.  Stores and saves both biases, then checks them
+    against 2048 counts +- *tolerance*: outside it, asks whether to go on
+    (CalibrationDeclined on no; the values stay stored).  BIAS_MENU and
+    BIAS_MENU_QUICK are puckutility's settings.
+    """
     reporter = reporter or Reporter()
     reporter.status('Calibrating current-sense bias...')
     sdo = node.sdo
+    scale = bias_scale(node)
+    previous = (sdo['Alpha']['Bias'].raw / scale, sdo['Beta']['Bias'].raw / scale)
     try:
         _enable(sdo)
-        sdo['Theta_e'].raw = 0x7FFF
+        sdo['Theta_e'].raw = 0x7FFF         # stall at the alpha peak (+pi)
         sdo['Motor']['ud'].raw = 0
         sdo['SetModeOfOperation'].raw = MODE_PHASE_VOLTAGE_ANGLE
-        reporter.sleep(1)
+        # uq after the mode switch: in profile torque the PI overwrites it
+        # every ISR; in phase-voltage-angle mode the write sticks.
+        sdo['Motor']['uq'].raw = 0
+        end = time.monotonic() + settle_s
+        while True:
+            left = end - time.monotonic()
+            reporter.progress(int(55 * (1 - max(0.0, left) / settle_s))
+                              if settle_s else 55)
+            if left <= 0:
+                break
+            reporter.sleep(min(0.05, left))
         # Filtered is Q12.4.  Firmware 4.4.0 and later keeps Bias in Q12.4
         # too, so it is stored as read; older firmware wants whole counts.
-        scale = bias_scale(node)
+        filt = _read_filtered(node, samples, sample_dwell_s, reporter.sleep,
+                              lambda f: reporter.progress(55 + int(40 * f)))
         for channel in ('Alpha', 'Beta'):
-            filt = _read_filtered(node, channel, sleep=reporter.sleep)
-            sdo[channel]['Bias'].raw = int(round(filt * scale / 16.0))
+            sdo[channel]['Bias'].raw = int(round(filt[channel] * scale / 16.0))
         save_single(node, 0x3008, 3)
         save_single(node, 0x3009, 3)
         a_bias = sdo['Alpha']['Bias'].raw / scale
@@ -201,18 +303,23 @@ def calibrate_bias(node, reporter=None):
             sdo['SetModeOfOperation'].raw = MODE_IDLE
         except Exception:
             pass
-    lo = BIAS_MIDPOINT * (1 - BIAS_TOLERANCE)
-    hi = BIAS_MIDPOINT * (1 + BIAS_TOLERANCE)
+    reporter.progress(100)
+    lo = BIAS_MIDPOINT * (1 - tolerance)
+    hi = BIAS_MIDPOINT * (1 + tolerance)
     ok = lo <= a_bias <= hi and lo <= b_bias <= hi
-    reporter.note('Bias: alpha {:.1f}, beta {:.1f} counts'.format(a_bias, b_bias))
+    reporter.note('Bias: alpha {:.3f} (was {:.3f}), beta {:.3f} (was {:.3f}) '
+                  'counts, {}-sample average'.format(
+                      a_bias, previous[0], b_bias, previous[1], samples))
     if not ok:
         _continue_or_raise(reporter, 'Current-sense bias out of bounds: alpha '
                            '{:.1f}, beta {:.1f} counts (acceptable {:.0f} - {:.0f}).'
-                           .format(a_bias, b_bias, lo, hi))
-    return dict(alpha_bias=a_bias, beta_bias=b_bias, ok=ok)
+                           '\n\n{}'.format(a_bias, b_bias, lo, hi, _DEBUG_HINTS))
+    return dict(alpha_bias=a_bias, beta_bias=b_bias, previous_alpha_bias=previous[0],
+                previous_beta_bias=previous[1], ok=ok)
 
 
-def calibrate_gain(node, reporter=None):
+def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
+                   settle_s=1.0):
     """Beta current-sense gain factor (0x3009,6).
 
     Drives the calibration current on the d axis in phase-voltage-angle mode
@@ -220,6 +327,16 @@ def calibrate_gain(node, reporter=None):
     then takes the ratio of the two channels' fundamentals (gain_fit()).  The
     dead-time error is six-fold over a revolution, so it has no fundamental
     and the fit ignores it, along with bias drift and the 2x-electrical term.
+
+    Why rotate: the old 2-angle method stalled at +pi (alpha) and -pi/2
+    (beta); a current-sense zero that drifts between the two reads (alpha
+    drifts thermally at 100 kHz) biases the ratio.  Validated hot at 100 kHz:
+    stock cal 6635 out of bounds, this 3886/3878/3889.  One whole revolution
+    is enough for the cancellation (sum cos = sum sin = 0); 48 samples keep
+    the accuracy, and the rotor moves a third of what three revolutions
+    moved.  The bounds are checked before the write, so a rejected value
+    never reaches the OD.  GAIN_MENU is puckutility's setting (the
+    proportional ramp, no extra settle).
     """
     reporter = reporter or Reporter()
     reporter.status('Calibrating current-sense gain...')
@@ -239,9 +356,12 @@ def calibrate_gain(node, reporter=None):
         sdo['SetModeOfOperation'].raw = MODE_PHASE_VOLTAGE_ANGLE
         sdo['Motor']['uq'].raw = 0
         sdo['Theta_e'].raw = 0
-        reporter.sleep(1)
-        ramp_to_calibration_current(node, reporter)
-        reporter.sleep(0.5)
+        reporter.sleep(settle_s)
+        ramp_to_calibration_current(
+            node, reporter, newton=newton_ramp,
+            progress=lambda f: reporter.progress(3 + int(27 * f)))
+        if post_ramp_s:
+            reporter.sleep(post_ramp_s)
         for k in range(GAIN_FIT_STEPS):
             au = k * 65536 // GAIN_FIT_STEPS
             sdo['Theta_e'].raw = au if au < 32768 else au - 65536
@@ -249,7 +369,7 @@ def calibrate_gain(node, reporter=None):
             samples.append((2.0 * math.pi * k / GAIN_FIT_STEPS,
                             sdo['Alpha']['Filtered'].raw, sdo['Beta']['Filtered'].raw))
             ids.append(sdo['Motor']['id'].raw / 1000.0 * i_peak)
-            reporter.progress(100 * (k + 1) // GAIN_FIT_STEPS)
+            reporter.progress(30 + 65 * (k + 1) // GAIN_FIT_STEPS)
     except BaseException:
         restore()
         raise
@@ -261,6 +381,8 @@ def calibrate_gain(node, reporter=None):
 
     a_amp, b_amp = gain_fit(samples)
     id_med = sorted(ids)[len(ids) // 2]
+    reporter.note('Rotating gain fit: |A| {:.1f} |B| {:.1f} ({} steps, id ~{:.0f} mA)'
+                  .format(a_amp, b_amp, GAIN_FIT_STEPS, id_med))
     # Filtered is Q12.4: 30 ADC counts of fundamental is the least worth a ratio.
     if a_amp < 30 * 16 or b_amp < 30 * 16 or id_med < 0.3 * target:
         restore()
@@ -273,33 +395,58 @@ def calibrate_gain(node, reporter=None):
     ok = lo <= gainfactor <= hi
     # Bounds before the write, so a rejected value never reaches the OD.
     if not ok and not reporter.confirm(
-            'Beta gain factor {} is out of bounds ({} - {}). Store it anyway?'
-            .format(gainfactor, lo, hi)):
+            'Beta gain factor {} is out of bounds ({} - {}).\n\n{}\n\n'
+            'Store it anyway?'.format(gainfactor, lo, hi, _DEBUG_HINTS)):
         restore()
-        raise CalibrationError('Beta gain factor {} out of bounds; not stored'
-                               .format(gainfactor))
+        raise CalibrationDeclined('Beta gain factor {} out of bounds; not stored'
+                                  .format(gainfactor))
     sdo['Beta']['Gainfactor'].raw = gainfactor
     save_single(node, 0x3008, 6)
     save_single(node, 0x3009, 6)
-    reporter.note('Beta gain factor {} (id {:.0f} mA)'.format(gainfactor, id_med))
-    return dict(beta_gain=gainfactor, id_ma=id_med, ok=ok)
+    readback = sdo['Beta']['Gainfactor'].raw
+    if readback != gainfactor:
+        reporter.warn('Beta gain factor read back {}, written {}'.format(
+            readback, gainfactor))
+    reporter.progress(100)
+    reporter.note('Beta gain factor {} (was {}, a/b {:.5f}, id {:.0f} mA)'.format(
+        gainfactor, orig[1], a_amp / b_amp, id_med))
+    return dict(beta_gain=gainfactor, previous_beta_gain=orig[1], id_ma=id_med,
+                a_amp=a_amp, b_amp=b_amp, ok=ok)
 
 
-def calibrate_ezero(node, reporter=None):
+def calibrate_ezero(node, reporter=None, steps=16):
     """Electrical zero and polarity (ezero.sweep); stores both.
 
-    The rotor turns one mechanical revolution each way.
+    The rotor turns one mechanical revolution each way.  *steps* per
+    electrical cycle (EZERO_QUICK_STEPS for the quick calibration).
+
+    Why a revolution sweep: a spin-through at one spot cancels friction but
+    not the encoder nonlinearity or cogging there; on a P4-42 single points
+    scatter +-20 deg electrical about the true zero, and a one-spot cal left
+    e_zero 21 deg off (a zero-current coast's back-EMF measured it; the sweep
+    then agreed within ~1 deg).
     """
     reporter = reporter or Reporter()
-    reporter.status('Calibrating encoder zero...')
+    reporter.status('Calibrating encoder zero (one revolution each way)...')
     try:
-        r = ezero.sweep(node, progress=lambda f: reporter.progress(100 * f),
+        node.sdo['ControlWord'].raw = 0x80
+        r = ezero.sweep(node, steps=steps,
+                        progress=lambda f: reporter.progress(95 * f),
                         sleep=reporter.sleep)
     except ezero.EZeroError as exc:
-        raise CalibrationError('encoder zero failed, nothing stored: {}'
-                               .format(exc)) from exc
+        hint = ''
+        try:
+            hint = ('; check the configuration (poles, i_cal) and that output '
+                    'friction is under the calibration torque ({:.0f} mNm)'
+                    .format(node.sdo['Calibration']['i_cal'].raw
+                            * node.sdo['Calibration']['kt'].raw / 1000))
+        except Exception:
+            pass
+        raise CalibrationError('encoder zero failed, nothing stored: {}{}'
+                               .format(exc, hint)) from exc
     sdo = node.sdo
     previous = sdo['Calibration']['e_zero'].raw
+    r['previous_polarity'] = sdo['Calibration']['e_polarity'].raw
     sdo['Calibration']['e_polarity'].raw = r['e_polarity']
     sdo['Calibration']['e_zero'].raw = r['e_zero']
     save_single(node, 0x3011, 2)    # e_polarity
@@ -307,11 +454,47 @@ def calibrate_ezero(node, reporter=None):
     r['previous'] = previous
     r['shift_deg'] = ezero.wrap(r['e_zero'] - previous, r['cts_per_elec_cycle']) \
         * 360.0 / r['cts_per_elec_cycle']
-    reporter.note('Encoder zero {} (was {}, {:+.1f} deg elec), polarity {:+d}, '
-                  'spread {:.1f} deg rms'.format(
+    reporter.progress(100)
+    reporter.note('Encoder zero {} (was {}, {:+.1f} deg elec), polarity {:+d} '
+                  '(was {:+d}); friction split {:.1f} deg, points scatter '
+                  '+-{:.1f} deg (rms {:.1f})'.format(
                       r['e_zero'], previous, r['shift_deg'], r['e_polarity'],
-                      r['spread_rms_deg']))
+                      r['previous_polarity'], r['friction_split_deg'],
+                      r['spread_max_deg'], r['spread_rms_deg']))
     return r
+
+
+def set_user_direction(node, reporter=None, threshold=1 / 8.0, poll_s=1.0,
+                       timeout_s=None):
+    """The user turns the output by hand in the direction they call positive;
+    UserPolarity (0x3013,3) is set so that reads positive, and saved.
+
+    Starts from UserPolarity = +1, waits until the position has moved more
+    than *threshold* of a revolution, then keeps +1 if it moved up, else
+    writes -1.  *timeout_s* None waits until moved or aborted."""
+    reporter = reporter or Reporter()
+    sdo = node.sdo
+    previous = sdo['EncoderConfig']['UserPolarity'].raw
+    sdo['EncoderConfig']['UserPolarity'].raw = 1
+    res = sdo['EncoderConfig']['Resolution'].raw
+    start = sdo['PositionFeedback'].raw
+    reporter.status('Please turn the motor in the positive (+) direction...')
+    t0 = time.monotonic()
+    while True:
+        reporter.sleep(poll_s)
+        moved = sdo['PositionFeedback'].raw - start
+        if abs(moved) > res * threshold:
+            break
+        if timeout_s is not None and time.monotonic() - t0 > timeout_s:
+            sdo['EncoderConfig']['UserPolarity'].raw = previous
+            raise CalibrationError('the motor did not turn ({} counts); '
+                                   'user direction unchanged'.format(moved))
+    polarity = 1 if moved > 0 else -1
+    sdo['EncoderConfig']['UserPolarity'].raw = polarity
+    save_single(node, 0x3013, 3)
+    reporter.note('User direction: UserPolarity {:+d} (was {:+d}), moved {} '
+                  'counts'.format(polarity, previous, moved))
+    return dict(user_polarity=polarity, previous=previous, moved=moved)
 
 
 STEPS = (

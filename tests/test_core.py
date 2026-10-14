@@ -207,6 +207,121 @@ class TestCalibrate(unittest.TestCase):
         self.assertGreater(calibrate.ramp_to_calibration_current(puck, quick(Reporter())), 0)
 
 
+class TestCalibrateMenuSettings(unittest.TestCase):
+    """puckutility's calibrate menu runs the same steps with its settings."""
+
+    def saves(self, puck):
+        return [v for k, v in puck.writes if k == puck.key('Save', 'Single')]
+
+    def test_bias_menu_settings(self):
+        puck = SimPuck()
+        reads = []
+        puck.hook_read('Alpha', 'Filtered', lambda: reads.append(1) or 2048 * 16)
+        res = calibrate.calibrate_bias(puck, quick(RecordingReporter()),
+                                       **calibrate.BIAS_MENU_QUICK)
+        self.assertEqual(len(reads), 100)
+        self.assertEqual(puck.get('Alpha', 'Bias'), 2048 * 16)
+        self.assertEqual(puck.get('Motor', 'uq'), 0)
+        self.assertIn('previous_alpha_bias', res)
+
+    def test_bias_band_is_five_percent(self):
+        # 4 % off: outside p4gui's 3 % band, inside the menu's 5 %.
+        puck = SimPuck(bias=(int(2048 * 1.04 * 16), 2048 * 16))
+        with self.assertRaises(calibrate.CalibrationDeclined):
+            calibrate.calibrate_bias(puck, quick(RecordingReporter(answers=[False])))
+        res = calibrate.calibrate_bias(SimPuck(bias=(int(2048 * 1.04 * 16), 2048 * 16)),
+                                       quick(RecordingReporter()), **calibrate.BIAS_MENU)
+        self.assertTrue(res['ok'])
+
+    def test_gain_newton_ramp(self):
+        puck = SimPuck()
+        res = calibrate.calibrate_gain(puck, quick(RecordingReporter()),
+                                       **calibrate.GAIN_MENU)
+        self.assertAlmostEqual(res['beta_gain'] / 4096.0, SimPuck.GAIN_RATIO, places=2)
+        self.assertEqual(res['previous_beta_gain'], 4096)
+        self.assertIn(((0x3009 << 8) | 6), self.saves(puck))
+        self.assertEqual(puck.get('Motor', 'ud'), 0)
+
+    def test_newton_ramp_steps_are_capped_and_few(self):
+        puck = SimPuck()
+        puck.set('SetModeOfOperation', None, 12)
+        uds = []
+        puck.hook_write('Motor', 'ud', uds.append)
+        ud = calibrate.ramp_to_calibration_current(puck, quick(Reporter()), newton=True)
+        # 1 A at ud 1000: i_cal 1000 mA is reached at ud >= 1000.
+        self.assertGreaterEqual(ud, 1000)
+        self.assertLess(len(uds), 10)
+        steps = [b - a for a, b in zip([0] + uds, uds)]
+        self.assertTrue(all(s <= max(calibrate.NEWTON_FIRST_STEP,
+                                     calibrate.NEWTON_STEP_MAX) for s in steps))
+
+    def test_gain_out_of_bounds_declined_restores(self):
+        puck = SimPuck()
+        puck.GAIN_RATIO = 1.3
+        puck.set('Beta', 'Gainfactor', 4000)
+        with self.assertRaises(calibrate.CalibrationDeclined):
+            calibrate.calibrate_gain(puck, quick(RecordingReporter(answers=[False])))
+        self.assertEqual(puck.get('Beta', 'Gainfactor'), 4000)
+
+    def test_ezero_quick_steps(self):
+        puck = SimPuck()
+        thetas = []
+        puck.hook_write('Theta_e', None, thetas.append)
+        res = calibrate.calibrate_ezero(puck, quick(RecordingReporter()),
+                                        steps=calibrate.EZERO_QUICK_STEPS)
+        self.assertEqual(puck.get('Calibration', 'e_zero'), SimPuck.E_ZERO)
+        self.assertIn('previous_polarity', res)
+        # 8 steps per electrical cycle: one revolution plus a lead, each way.
+        pp = SimPuck.POLES // 2
+        self.assertEqual(len(thetas) - 1, 2 * (4 + pp * 8))
+
+    def test_clear_slope(self):
+        puck = SimPuck()
+        puck.values[(0x3008, 7)] = 5
+        puck.values[(0x3009, 7)] = 6
+        calibrate.clear_slope(puck)
+        self.assertEqual((puck.values[(0x3008, 7)], puck.values[(0x3009, 7)]), (0, 0))
+        self.assertEqual(self.saves(puck), [(0x3008 << 8) | 7, (0x3009 << 8) | 7])
+
+    def test_deenergise_clear_fault(self):
+        puck = SimPuck()
+        puck.set('Motor', 'ud', 900)
+        calibrate.deenergise(puck, settle_s=0, clear_fault=True)
+        self.assertEqual(puck.get('Motor', 'ud'), 0)
+        self.assertEqual(puck.get('ControlWord'), 0x80)
+
+
+class TestUserDirection(unittest.TestCase):
+    def puck(self, path):
+        puck = FakeNode(5)
+        puck.set('EncoderConfig', 'UserPolarity', -1)
+        puck.set('EncoderConfig', 'Resolution', 4096)
+        puck.set('Save', 'Single', 0)
+        it = iter(path)
+        puck.hook_read('PositionFeedback', None, lambda: next(it))
+        return puck
+
+    def test_turned_negative(self):
+        puck = self.puck([1000, 990, 400])
+        res = calibrate.set_user_direction(puck, quick(RecordingReporter()))
+        self.assertEqual(res['user_polarity'], -1)
+        self.assertEqual(puck.get('EncoderConfig', 'UserPolarity'), -1)
+        self.assertIn(((0x3013 << 8) | 3),
+                      [v for k, v in puck.writes if k == puck.key('Save', 'Single')])
+
+    def test_turned_positive(self):
+        res = calibrate.set_user_direction(self.puck([0, 600]),
+                                           quick(RecordingReporter()))
+        self.assertEqual(res['user_polarity'], 1)
+
+    def test_timeout_restores(self):
+        puck = self.puck([0] * 100)
+        with self.assertRaises(calibrate.CalibrationError):
+            calibrate.set_user_direction(puck, quick(RecordingReporter()),
+                                         poll_s=0, timeout_s=-1)
+        self.assertEqual(puck.get('EncoderConfig', 'UserPolarity'), -1)
+
+
 class FakeSession:
     BOOT_S = 0
     REBOOT_TIMEOUT_S = 0.2

@@ -14,7 +14,8 @@ Each app is split model / controller / view:
 * **shared algorithms** — `tuning` (pucktuner's current / velocity /
   position gain design and PWM selection), `ezero`, `calibrate`.
 * **views** — `cli` (argparse subcommands, `ConsoleReporter`) and the wx GUI
-  (`WxReporter`), both calling the same controllers.
+  (each app's own `WxReporter`), both calling the same controllers.  Nothing
+  in p4core imports wx.
 
 ## Shared commands
 

@@ -16,8 +16,12 @@ pandas-based configtest.build_csv:
   load(node, path, ...)        parse + validate + apply
   build_from_template(node, template, out)
                                read the puck's values into a copy of a template
+  template_for(node)           the shipped blank template for the puck's model
+  export_node(node, output)    build_from_template with that template
   set_entry(path, index, sub, datatype, value)
                                change one value in a CSV file in place
+  write_table / read_table     the apps' two-column (name, value) exports:
+                               gains, PMSM parameters, limits
   remap_pdo_cob_ids(node, new_id, old_id)
                                the PDO part of a node-ID change
 """
@@ -481,6 +485,62 @@ def build_from_template(node, template, output, reporter=None, date=None):
         f.write('\n'.join(out_lines) + '\n')
     reporter.progress(100)
     return count
+
+
+def template_for(node):
+    """The shipped blank template for *node*'s model (0x1018,2), e.g.
+    P4-42-Blank.csv.  Raises ValueError when the model is unknown or has no
+    template."""
+    from . import can_backend, paths
+    code = node.sdo.upload(0x1018, 2)
+    model = can_backend.model_from_product_code(int.from_bytes(code[:4],
+                                                               'little'))
+    name = '{}-Blank.csv'.format(model) if model else None
+    if name is None or name not in paths.templates():
+        raise ValueError('no config template for product code 0x{:08x} '
+                         '(model {}); shipped: {}'.format(
+                             int.from_bytes(code[:4], 'little'), model,
+                             ', '.join(paths.templates())))
+    return paths.template(name)
+
+
+def export_node(node, output, template=None, reporter=None, date=None):
+    """Write *output*: *template* (default: template_for(node)) filled with
+    the puck's current values.  Returns (template path, values read)."""
+    template = template or template_for(node)
+    return template, build_from_template(node, template, output, reporter,
+                                         date)
+
+
+def write_table(path, header, rows, columns=('Parameter', 'Value')):
+    """A two-column export: a ``# header`` line, the column names, then
+    (name, value) rows; None is written as an empty cell."""
+    with open(path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([header if header.startswith('#')
+                         else '# ' + header])
+        writer.writerow(list(columns))
+        for name, value in rows:
+            writer.writerow([name, '' if value is None else value])
+
+
+def read_table(path, names=None, convert=float):
+    """{name: convert(value)} from a write_table file, in file order.  With
+    *names*, other rows are ignored; empty values are skipped."""
+    out = {}
+    with open(path, newline='') as f:
+        for row in csv.reader(f):
+            if len(row) < 2 or not row[0] or row[0].startswith('#'):
+                continue
+            if names is not None and row[0] not in names:
+                continue
+            if not row[1].strip():
+                continue
+            try:
+                out[row[0]] = convert(row[1])
+            except ValueError:
+                continue
+    return out
 
 
 def set_entry(path, index, sub, datatype, value, comment=''):

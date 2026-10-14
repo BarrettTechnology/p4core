@@ -10,13 +10,12 @@
   reporter     how an operation reports progress and asks questions
   cia402       ControlWord commands and ModesOfOperation values
   cli          argparse scaffolding and the shared subcommands
-  wx_reporter  a Reporter for wx frames (imports wx; import it explicitly)
-  wx_splash    the start-up splash (imports wx; import it explicitly)
   app_settings per-user settings
   paths        package data and per-user directories
 
-Only the modules are imported here: ``import p4core`` does not open a bus,
-import wx or pull in canopen.
+Only the modules are imported here: ``import p4core`` does not open a bus
+or pull in canopen.  Nothing in p4core imports wx: the wx Reporter and the
+splash live in the apps.
 """
 
 __version__ = '0.1.0'
