@@ -164,6 +164,7 @@ Max sensor current (mA),,0x3001,8,UNSIGNED16,11014
 Nominal bus voltage (V*10),,0x3001,9,UNSIGNED16,240
 Gate driver input inversion? (bool),,0x3001,10,UNSIGNED8,0
 Dead-time comp ramp width (mA),,0x3001,12,UNSIGNED16,0
+PWM periods per case slot (0 = auto),,0x3001,13,UNSIGNED8,0
 
 # iSense circuit values
 Alpha Gain (*1000),,0x3008,4,UNSIGNED16,7490
