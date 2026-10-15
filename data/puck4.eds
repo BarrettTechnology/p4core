@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=09:15AM
+CreationTime=10:20AM
 CreationDate=10-15-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=09:15AM
+ModificationTime=10:20AM
 ModificationDate=10-15-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -2198,14 +2198,14 @@ DefaultValue=0
 [3001]
 ParameterName=Amp
 ObjectType=0x09
-SubNumber=15
+SubNumber=16
 
 [3001sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=14
+DefaultValue=15
 
 [3001sub1]
 ParameterName=Frequency
@@ -2302,6 +2302,13 @@ DefaultValue=0
 ParameterName=ControlRate
 ObjectType=0x07
 DataType=0x0007
+AccessType=ro
+DefaultValue=0
+
+[3001subf]
+ParameterName=PwmPeriodsMax
+ObjectType=0x07
+DataType=0x0005
 AccessType=ro
 DefaultValue=0
 
