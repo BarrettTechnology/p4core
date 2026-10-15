@@ -4,11 +4,11 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=10:52AM
-CreationDate=10-14-2026
+CreationTime=09:15AM
+CreationDate=10-15-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=10:52AM
-ModificationDate=10-14-2026
+ModificationTime=09:15AM
+ModificationDate=10-15-2026
 ModifiedBy=scripts/gen_eds.py
 
 [DeviceInfo]
@@ -2718,14 +2718,14 @@ DefaultValue=0
 [3010]
 ParameterName=Motor
 ObjectType=0x09
-SubNumber=12
+SubNumber=14
 
 [3010sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=11
+DefaultValue=13
 
 [3010sub1]
 ParameterName=Theta_m
@@ -2799,6 +2799,20 @@ DefaultValue=0
 
 [3010subb]
 ParameterName=PositionLow
+ObjectType=0x07
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+
+[3010subc]
+ParameterName=IdUnfiltered
+ObjectType=0x07
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+
+[3010subd]
+ParameterName=IdReference
 ObjectType=0x07
 DataType=0x0003
 AccessType=ro
