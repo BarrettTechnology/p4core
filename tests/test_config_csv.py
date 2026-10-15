@@ -251,6 +251,12 @@ class TestPerBoardRows(unittest.TestCase):
         self.assertEqual(result.written, 5)
         self.assertEqual(config_csv.board_serial(rows(text)), 0x5E41)
 
+    def test_an_unprogrammed_serial_matches_nothing(self):
+        text = config_csv.BOARD_SERIAL_TAG + ' 0x0\n' + self.TEXT
+        node = self.node(0)
+        config_csv.apply(node, rows(text))
+        self.assertEqual(self.written(node), {(0x220A, 0)})
+
     def test_board_rows_true_forces_and_false_refuses(self):
         node = self.node(None)
         self.assertEqual(config_csv.apply(node, rows(self.TEXT),

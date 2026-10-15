@@ -354,10 +354,13 @@ def board_serial(rows):
 
 
 def _node_serial(node):
+    """0x1018,4, or None when unreadable or 0 (never programmed: a 0 would
+    match every other unprogrammed board)."""
     try:
-        return struct.unpack('<I', bytes(node.sdo.upload(*SERIAL_OBJECT)[:4]))[0]
+        v = struct.unpack('<I', bytes(node.sdo.upload(*SERIAL_OBJECT)[:4]))[0]
     except Exception:
         return None
+    return v or None
 
 
 def apply(node, rows, node_id=None, reporter=None, board_rows=None):
@@ -381,7 +384,7 @@ def apply(node, rows, node_id=None, reporter=None, board_rows=None):
     entries = [r for r in rows if r.kind == 'entry']
     if board_rows is None:
         mine = board_serial(rows)
-        board_rows = mine is not None and mine == _node_serial(node)
+        board_rows = bool(mine) and mine == _node_serial(node)
     if not board_rows:
         def own(r):
             try:
