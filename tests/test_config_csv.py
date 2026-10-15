@@ -159,6 +159,46 @@ class TestBuildFromTemplate(unittest.TestCase):
             if os.path.exists(out):
                 os.unlink(out)
 
+    def test_round_trip_all_models(self):
+        """The same property as test_round_trip, for every model template --
+        so a row added to only one of the three (e.g. a model-specific
+        default) still round-trips, and a template that fails to validate
+        against the EDS (a bad datatype or a stray comma) is caught here
+        too, not just for P4-42."""
+        for name in paths.templates():
+            template = paths.template(name)
+            src = FakeNode(5)
+            entries = [r for r in config_csv.read(template)
+                      if r.kind == 'entry' and r.index
+                      and not r.index.lower().startswith('0x1')]
+            wire = {}
+            for n, r in enumerate(entries):
+                key = (int(r.index, 0), int(r.subindex, 0))
+                if r.datatype == 'REAL32':
+                    value = str(0.25 * n)
+                elif r.datatype.startswith('INTEGER'):
+                    value = str(-n)
+                else:
+                    value = str(n)
+                wire[key] = src.values[key] = config_csv.encode(
+                    r.datatype, value)[0]
+            out = tempfile.mktemp(suffix='.csv')
+            try:
+                count = config_csv.build_from_template(src, template, out)
+                self.assertEqual(count, len(entries), name)
+                built = config_csv.read(out)
+                self.assertEqual(config_csv.validate(built, 7, fake.od())[0],
+                                 [], name)
+                dst = FakeNode(7)
+                result = config_csv.apply(dst, built)
+                self.assertTrue(result.ok, (name, result.errors))
+                sent = {(i, s): d for i, s, d in dst.downloads}
+                for key, data in wire.items():
+                    self.assertEqual(sent.get(key), data, (name, hex(key[0])))
+            finally:
+                if os.path.exists(out):
+                    os.unlink(out)
+
     def test_format(self):
         self.assertEqual(config_csv._format('0x2000', 'UNSIGNED32', 255), '0xff')
         self.assertEqual(config_csv._format('0x6000', 'INTEGER32', -16), '-0x10')
