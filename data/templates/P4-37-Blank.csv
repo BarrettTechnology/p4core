@@ -1,6 +1,7 @@
 #Name,FILE_INFO,,,STRING,Configure Puck 4 $ID
 
 # This is a CANopen config template for building P4 config files
+# P4-37-1950 (product code 1950, and the default P4-37): 15 mOhm shunts, alpha gain 3.53, beta 2.03
 Name,FILE_INFO,,,STRING,Configure Puck $ID
 Version,FILE_VERSION,,,STRING,V1.0.0 (2025-3-20)
 

@@ -547,19 +547,22 @@ def build_from_template(node, template, output, reporter=None, date=None):
 
 def template_for(node):
     """The shipped blank template for *node*'s model (0x1018,2), e.g.
-    P4-42-Blank.csv.  Raises ValueError when the model is unknown or has no
-    template."""
+    P4-42-Blank.csv.  A board variant with its own template,
+    <model>-<product code>-Blank.csv (P4-37-1323-Blank.csv: 20 mOhm shunts,
+    gains 7.49/4.32, where P4-37-Blank.csv is the 1950's), is preferred.
+    Raises ValueError when the model is unknown or has no template."""
     from . import can_backend, paths
-    code = node.sdo.upload(0x1018, 2)
-    model = can_backend.model_from_product_code(int.from_bytes(code[:4],
-                                                               'little'))
-    name = '{}-Blank.csv'.format(model) if model else None
-    if name is None or name not in paths.templates():
-        raise ValueError('no config template for product code 0x{:08x} '
-                         '(model {}); shipped: {}'.format(
-                             int.from_bytes(code[:4], 'little'), model,
-                             ', '.join(paths.templates())))
-    return paths.template(name)
+    raw = node.sdo.upload(0x1018, 2)
+    code = int.from_bytes(raw[:4], 'little')
+    model = can_backend.model_from_product_code(code)
+    shipped = paths.templates()
+    for name in (('{}-{}-Blank.csv'.format(model, code),
+                  '{}-Blank.csv'.format(model)) if model else ()):
+        if name in shipped:
+            return paths.template(name)
+    raise ValueError('no config template for product code 0x{:08x} '
+                     '(model {}); shipped: {}'.format(code, model,
+                                                      ', '.join(shipped)))
 
 
 def export_node(node, output, template=None, reporter=None, date=None):
