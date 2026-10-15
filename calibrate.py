@@ -31,6 +31,11 @@ MODE_IDLE = 0
 MODE_PHASE_VOLTAGE_ANGLE = 12
 
 GAIN_FIT_STEPS = 48         # one electrical revolution
+#: Per-step dwell at full size; a caller that raised i_cal to the current
+#: sense floor (p4sysid.probe) passes a smaller dwell_scale to hold the same
+#: I^2Rt, down to GAIN_STEP_DWELL_MIN_S (the fit still needs a settled read).
+GAIN_STEP_DWELL_S = 0.12
+GAIN_STEP_DWELL_MIN_S = 0.03
 GAIN_NOMINAL = 4096
 BIAS_MIDPOINT = 2048        # ADC counts
 #: The firmware's current-sense window (stm32 app/mode_switch.h): outside it,
@@ -355,7 +360,7 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
 
 
 def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
-                   settle_s=1.0):
+                   settle_s=1.0, dwell_scale=1.0):
     """Beta current-sense gain factor (0x3009,6).
 
     Drives the calibration current on the d axis in phase-voltage-angle mode
@@ -372,12 +377,20 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     the accuracy, and the rotor moves a third of what three revolutions
     moved.  The bounds are checked before the write, so a rejected value
     never reaches the OD.  GAIN_MENU is puckutility's setting (the
-    proportional ramp, no extra settle).
+    proportional ramp, no extra settle).  dwell_scale shortens the per-step
+    settle and post_ramp_s (not below GAIN_STEP_DWELL_MIN_S) for a current
+    raised to the sense floor, to hold the winding's I^2Rt budget.
     """
     reporter = reporter or Reporter()
     reporter.status('Calibrating current-sense gain...')
     sdo = node.sdo
     orig = (sdo['Alpha']['Gainfactor'].raw, sdo['Beta']['Gainfactor'].raw)
+    step_dwell_s = max(GAIN_STEP_DWELL_MIN_S, GAIN_STEP_DWELL_S * dwell_scale)
+    if dwell_scale < 1.0:
+        post_ramp_s = post_ramp_s * dwell_scale if post_ramp_s else post_ramp_s
+        reporter.note('Gain: dwell scaled by {:.2f} ({:.0f} ms/step) for the '
+                      'raised calibration current'.format(
+                          dwell_scale, step_dwell_s * 1000))
 
     def restore():
         sdo['Alpha']['Gainfactor'].raw, sdo['Beta']['Gainfactor'].raw = orig
@@ -401,7 +414,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
         for k in range(GAIN_FIT_STEPS):
             au = k * 65536 // GAIN_FIT_STEPS
             sdo['Theta_e'].raw = au if au < 32768 else au - 65536
-            reporter.sleep(0.12)
+            reporter.sleep(step_dwell_s)
             samples.append((2.0 * math.pi * k / GAIN_FIT_STEPS,
                             sdo['Alpha']['Filtered'].raw, sdo['Beta']['Filtered'].raw))
             ids.append(sdo['Motor']['id'].raw / 1000.0 * i_peak)

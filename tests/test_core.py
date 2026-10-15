@@ -172,6 +172,30 @@ class TestCalibrate(unittest.TestCase):
         self.assertEqual(puck.get('Beta', 'Gainfactor'), res['beta_gain'])
         self.assertEqual(puck.get('Motor', 'ud'), 0)
 
+    def test_gain_dwell_scale_shortens_sleep(self):
+        # A probe that raised i_cal to the sense floor (p4sysid.probe) passes
+        # a smaller dwell_scale so Gain's per-step hold -- and so its
+        # I^2Rt -- shrinks to match, down to GAIN_STEP_DWELL_MIN_S.
+        class SpySleep(RecordingReporter):
+            def __init__(self):
+                super().__init__()
+                self.slept = []
+
+            def sleep(self, seconds):
+                self.slept.append(seconds)
+
+        rep = SpySleep()
+        puck = SimPuck()
+        calibrate.calibrate_gain(puck, rep, dwell_scale=0.5)
+        scaled = calibrate.GAIN_STEP_DWELL_S * 0.5
+        steps = [s for s in rep.slept if abs(s - scaled) < 1e-9]
+        self.assertEqual(len(steps), calibrate.GAIN_FIT_STEPS)
+        self.assertGreater(scaled, calibrate.GAIN_STEP_DWELL_MIN_S)
+
+        full = SpySleep()
+        calibrate.calibrate_gain(SimPuck(), full)       # dwell_scale=1.0
+        self.assertIn(calibrate.GAIN_STEP_DWELL_S, full.slept)
+
     def test_gain_no_current_restores(self):
         puck = SimPuck()
         puck.hook_read('Motor', 'id', lambda: 0)
