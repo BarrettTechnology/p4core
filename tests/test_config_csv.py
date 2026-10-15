@@ -125,6 +125,7 @@ class TestBuildFromTemplate(unittest.TestCase):
         every non-communication value it was built from."""
         template = paths.template('P4-42-Blank.csv')
         src = FakeNode(5)
+        src.values[(0x1018, 4)] = (0x5E41).to_bytes(4, 'little')
         entries = [r for r in config_csv.read(template) if r.kind == 'entry'
                    and r.index and not r.index.lower().startswith('0x1')]
         wire = {}
@@ -148,7 +149,8 @@ class TestBuildFromTemplate(unittest.TestCase):
             self.assertEqual(config_csv.file_version(built), 'V1.0.0 (2026-09-30)')
             self.assertTrue(any('$ID' in r.data for r in built
                                 if r.kind == 'entry' and len(r.fields) == 6))
-            dst = FakeNode(7)
+            dst = FakeNode(7)               # the same board, re-addressed
+            dst.values[(0x1018, 4)] = (0x5E41).to_bytes(4, 'little')
             result = config_csv.apply(dst, built)
             self.assertTrue(result.ok, result.errors)
             sent = {(i, s): d for i, s, d in dst.downloads}
@@ -168,6 +170,7 @@ class TestBuildFromTemplate(unittest.TestCase):
         for name in paths.templates():
             template = paths.template(name)
             src = FakeNode(5)
+            src.values[(0x1018, 4)] = (0x5E41).to_bytes(4, 'little')
             entries = [r for r in config_csv.read(template)
                       if r.kind == 'entry' and r.index
                       and not r.index.lower().startswith('0x1')]
@@ -190,6 +193,7 @@ class TestBuildFromTemplate(unittest.TestCase):
                 self.assertEqual(config_csv.validate(built, 7, fake.od())[0],
                                  [], name)
                 dst = FakeNode(7)
+                dst.values[(0x1018, 4)] = (0x5E41).to_bytes(4, 'little')
                 result = config_csv.apply(dst, built)
                 self.assertTrue(result.ok, (name, result.errors))
                 sent = {(i, s): d for i, s, d in dst.downloads}
@@ -204,6 +208,74 @@ class TestBuildFromTemplate(unittest.TestCase):
         self.assertEqual(config_csv._format('0x6000', 'INTEGER32', -16), '-0x10')
         self.assertEqual(config_csv._format('0x6000', 'UNSIGNED32', 16), '16')
         self.assertEqual(config_csv._format('0x2000', 'UNSIGNED8', 0), '0')
+
+
+class TestPerBoardRows(unittest.TestCase):
+    TEXT = '\n'.join([
+        'Temp,,0x220A,0,UNSIGNED8,85',
+        'Alpha bias,,0x3008,3,UNSIGNED16,2048',
+        'Alpha gain factor,,0x3008,6,UNSIGNED16,0',
+        'Electrical zero,,0x3011,1,UNSIGNED16,100',
+        'Comp active,,0x3027,1,UNSIGNED16,1',
+    ])
+
+    def node(self, serial):
+        n = FakeNode(5)
+        if serial is not None:
+            n.values[(0x1018, 4)] = serial.to_bytes(4, 'little')
+        return n
+
+    def written(self, node):
+        return {(i, s) for i, s, _ in node.downloads}
+
+    def test_a_csv_with_no_serial_keeps_the_boards_calibration(self):
+        # A product CSV made from a blank template: its zero Gainfactor
+        # must not land on a calibrated board.
+        node = self.node(0x5E41)
+        rep = RecordingReporter()
+        result = config_csv.apply(node, rows(self.TEXT), reporter=rep)
+        self.assertTrue(result.ok)
+        self.assertEqual(self.written(node), {(0x220A, 0)})
+        self.assertTrue(any('own calibration' in t for t in rep.texts('note')))
+
+    def test_another_boards_export_is_skipped(self):
+        text = config_csv.BOARD_SERIAL_TAG + ' 0x1111\n' + self.TEXT
+        node = self.node(0x5E41)
+        config_csv.apply(node, rows(text))
+        self.assertEqual(self.written(node), {(0x220A, 0)})
+
+    def test_the_same_boards_export_restores_everything(self):
+        text = config_csv.BOARD_SERIAL_TAG + ' 0x5e41\n' + self.TEXT
+        node = self.node(0x5E41)
+        result = config_csv.apply(node, rows(text))
+        self.assertEqual(result.written, 5)
+        self.assertEqual(config_csv.board_serial(rows(text)), 0x5E41)
+
+    def test_board_rows_true_forces_and_false_refuses(self):
+        node = self.node(None)
+        self.assertEqual(config_csv.apply(node, rows(self.TEXT),
+                                          board_rows=True).written, 5)
+        text = config_csv.BOARD_SERIAL_TAG + ' 0x5e41\n' + self.TEXT
+        node = self.node(0x5E41)
+        self.assertEqual(config_csv.apply(node, rows(text),
+                                          board_rows=False).written, 1)
+
+    def test_export_records_the_serial(self):
+        template = paths.template('P4-42-Blank.csv')
+        src = self.node(0x5E41)
+        for r in config_csv.read(template):
+            if r.kind == 'entry' and r.index and \
+                    not r.index.lower().startswith('0x1'):
+                src.values[(int(r.index, 0), int(r.subindex, 0))] = \
+                    config_csv.encode(r.datatype, '0')[0]
+        out = tempfile.mktemp(suffix='.csv')
+        try:
+            config_csv.build_from_template(src, template, out)
+            self.assertEqual(config_csv.board_serial(config_csv.read(out)),
+                             0x5E41)
+        finally:
+            if os.path.exists(out):
+                os.unlink(out)
 
 
 class TestSetEntry(unittest.TestCase):
