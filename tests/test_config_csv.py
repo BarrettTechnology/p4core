@@ -210,7 +210,7 @@ class TestBuildFromTemplate(unittest.TestCase):
         self.assertEqual(config_csv._format('0x2000', 'UNSIGNED8', 0), '0')
 
 
-class TestPerBoardRows(unittest.TestCase):
+class TestBoardCalibrationRows(unittest.TestCase):
     TEXT = '\n'.join([
         'Temp,,0x220A,0,UNSIGNED8,85',
         'Alpha bias,,0x3008,3,UNSIGNED16,2048',
@@ -219,69 +219,48 @@ class TestPerBoardRows(unittest.TestCase):
         'Comp active,,0x3027,1,UNSIGNED16,1',
     ])
 
-    def node(self, serial):
-        n = FakeNode(5)
-        if serial is not None:
-            n.values[(0x1018, 4)] = serial.to_bytes(4, 'little')
-        return n
-
     def written(self, node):
         return {(i, s) for i, s, _ in node.downloads}
 
-    def test_a_csv_with_no_serial_keeps_the_boards_calibration(self):
-        # A product CSV made from a blank template: its zero Gainfactor
-        # must not land on a calibrated board.
-        node = self.node(0x5E41)
+    def test_apply_never_writes_board_calibration(self):
+        # An older CSV (an export, or a product CSV made from an old blank
+        # template with a zero Gainfactor) must not land on a calibrated
+        # board, whichever board it came from.
+        node = FakeNode(5)
         rep = RecordingReporter()
-        result = config_csv.apply(node, rows(self.TEXT), reporter=rep)
+        result = config_csv.apply(node, rows(
+            '# Board serial (0x1018,4): 0x5e41\n' + self.TEXT), reporter=rep)
         self.assertTrue(result.ok)
         self.assertEqual(self.written(node), {(0x220A, 0)})
         self.assertTrue(any('own calibration' in t for t in rep.texts('note')))
 
-    def test_another_boards_export_is_skipped(self):
-        text = config_csv.BOARD_SERIAL_TAG + ' 0x1111\n' + self.TEXT
-        node = self.node(0x5E41)
-        config_csv.apply(node, rows(text))
-        self.assertEqual(self.written(node), {(0x220A, 0)})
+    def test_templates_carry_no_board_calibration(self):
+        for name in paths.templates():
+            keys = {(int(r.index, 0), int(r.subindex, 0))
+                    for r in config_csv.read(paths.template(name))
+                    if r.kind == 'entry' and r.index and r.subindex}
+            self.assertFalse(keys & config_csv.BOARD_CALIBRATION, name)
 
-    def test_the_same_boards_export_restores_everything(self):
-        text = config_csv.BOARD_SERIAL_TAG + ' 0x5e41\n' + self.TEXT
-        node = self.node(0x5E41)
-        result = config_csv.apply(node, rows(text))
-        self.assertEqual(result.written, 5)
-        self.assertEqual(config_csv.board_serial(rows(text)), 0x5E41)
-
-    def test_an_unprogrammed_serial_matches_nothing(self):
-        text = config_csv.BOARD_SERIAL_TAG + ' 0x0\n' + self.TEXT
-        node = self.node(0)
-        config_csv.apply(node, rows(text))
-        self.assertEqual(self.written(node), {(0x220A, 0)})
-
-    def test_board_rows_true_forces_and_false_refuses(self):
-        node = self.node(None)
-        self.assertEqual(config_csv.apply(node, rows(self.TEXT),
-                                          board_rows=True).written, 5)
-        text = config_csv.BOARD_SERIAL_TAG + ' 0x5e41\n' + self.TEXT
-        node = self.node(0x5E41)
-        self.assertEqual(config_csv.apply(node, rows(text),
-                                          board_rows=False).written, 1)
-
-    def test_export_records_the_serial(self):
-        template = paths.template('P4-42-Blank.csv')
-        src = self.node(0x5E41)
-        for r in config_csv.read(template):
-            if r.kind == 'entry' and r.index and \
-                    not r.index.lower().startswith('0x1'):
-                src.values[(int(r.index, 0), int(r.subindex, 0))] = \
-                    config_csv.encode(r.datatype, '0')[0]
+    def test_export_drops_board_calibration_and_the_serial(self):
+        # A template made from an old export still has them: the export
+        # leaves them out.
+        src = FakeNode(5)
+        src.values[(0x220A, 0)] = (85).to_bytes(1, 'little')
+        src.values[(0x3008, 6)] = (4096).to_bytes(2, 'little')
+        with tempfile.NamedTemporaryFile('w', suffix='.csv',
+                                         delete=False) as f:
+            f.write('# Board serial (0x1018,4): 0x5e41\n' + self.TEXT + '\n')
         out = tempfile.mktemp(suffix='.csv')
         try:
-            config_csv.build_from_template(src, template, out)
-            self.assertEqual(config_csv.board_serial(config_csv.read(out)),
-                             0x5E41)
+            config_csv.build_from_template(src, f.name, out)
+            text = open(out).read()
+            self.assertNotIn('Board serial', text)
+            self.assertNotIn('0x3008', text)
+            self.assertIn('0x220A', text)
         finally:
-            if os.path.exists(out):
-                os.unlink(out)
+            for path in (f.name, out):
+                if os.path.exists(path):
+                    os.unlink(path)
 
 
 class TestSetEntry(unittest.TestCase):

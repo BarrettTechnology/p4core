@@ -171,18 +171,10 @@ Gate driver input inversion? (bool),,0x3001,10,UNSIGNED8,0
 Dead-time comp ramp width (mA),,0x3001,12,UNSIGNED16,0
 
 # iSense circuit values
-Alpha current-sense bias (counts; Q12.4 on firmware 4.4.0+ else Q12.0),,0x3008,3,UNSIGNED16,0
 Alpha Gain (*1000),,0x3008,4,UNSIGNED16,7490
 Alpha Shunt (mOhms),,0x3008,5,UNSIGNED16,20
-Alpha current-sense gain factor (Q4.12),,0x3008,6,UNSIGNED16,0
-Alpha current-sense slope (Q4.12),,0x3008,7,INTEGER16,0
-Alpha drive-gated offset (mA),,0x3008,8,INTEGER16,0
-Beta current-sense bias (counts; Q12.4 on firmware 4.4.0+ else Q12.0),,0x3009,3,UNSIGNED16,0
 Beta Gain (*1000),,0x3009,4,UNSIGNED16,7490
 Beta Shunt (mOhms),,0x3009,5,UNSIGNED16,20
-Beta current-sense gain factor (Q4.12),,0x3009,6,UNSIGNED16,0
-Beta current-sense slope (Q4.12),,0x3009,7,INTEGER16,0
-Beta drive-gated offset (mA),,0x3009,8,INTEGER16,0
 
 # Encoder settings
 Encoder resolution (cts),,0x3013,1,UNSIGNED32,4096
@@ -191,20 +183,4 @@ Encoder type,,0x3013,4,UNSIGNED8,0
 Encoder lag factor,,0x3013,5,UNSIGNED16,0
 Encoder hardware filter,,0x3013,6,UNSIGNED8,0x30 # MA782 = 0x30; MA736 = 0xA0
 
-# Encoder runout compensation (0x3027): write the bins and filter model
-# before the active flag below -- firmware applies H(j k w) from fn/zeta
-# as soon as compensation is on, so turning it on first would run against
-# stale bins (see p4sysid enctable.upload_bins)
-Encoder comp bin 0 A_s (Q8.8 counts),,0x3027,2,INTEGER16,0
-Encoder comp bin 0 K (harmonic),,0x3027,3,UNSIGNED16,0
-Encoder comp bin 0 A_c (Q8.8 counts),,0x3027,4,INTEGER16,0
-Encoder comp bin 1 A_s (Q8.8 counts),,0x3027,5,INTEGER16,0
-Encoder comp bin 1 K (harmonic),,0x3027,6,UNSIGNED16,0
-Encoder comp bin 1 A_c (Q8.8 counts),,0x3027,7,INTEGER16,0
-Encoder comp filter natural frequency (Hz; 0 = static table),,0x3027,8,UNSIGNED16,150
-Encoder comp filter damping (x1000),,0x3027,9,UNSIGNED16,880
-Encoder compensation active (write last - needs the bins above),,0x3027,1,UNSIGNED16,0
-
-Electrical zero (cts; the commutation reference the winding step sets -- distinct from the encoder user zero above at 0x3013 sub 2),,0x3011,1,UNSIGNED16,0
-Electrical polarity (+-1; distinct from the user polarity below at 0x607E),,0x3011,2,INTEGER8,-1
 User polarity (0xC0 inverts),,0x607E,0,UNSIGNED8,0x00

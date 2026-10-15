@@ -94,17 +94,17 @@ NODE_ID_OBJECT = (0x21B0, 0)
 LEGACY_POLARITY = (0x3013, 3)
 POLARITY = (0x607E, 0)
 
-#: Rows that belong to one board, not to its product: the current-sense
-#: calibration, electrical zero and winding polarity, and the encoder runout
-#: table.  An export records its board's serial (BOARD_SERIAL_TAG); apply()
-#: writes these rows only to that same board.  Loaded onto another puck they
-#: would replace its calibration with someone else's -- or, from a blank
-#: template, zero its Gainfactor, which reads every current as 0.
-PER_BOARD = frozenset(
+#: Board calibration: the current-sense calibration, electrical zero and
+#: winding polarity, and the encoder runout table.  A CSV configures the
+#: communication and the motor, never these: they belong to one board and are
+#: measured on it (p4sysid commissioning), so the templates carry none and
+#: export writes none.  apply() skips any an older CSV still has -- loaded
+#: onto another puck they would replace its calibration with someone else's,
+#: or from a blank template zero its Gainfactor, which reads every current
+#: as 0.
+BOARD_CALIBRATION = frozenset(
     [(0x3008, s) for s in (3, 6, 7, 8)] + [(0x3009, s) for s in (3, 6, 7, 8)] +
     [(0x3011, 1), (0x3011, 2)] + [(0x3027, s) for s in range(1, 10)])
-SERIAL_OBJECT = (0x1018, 4)
-BOARD_SERIAL_TAG = '# Board serial (0x1018,4):'
 
 
 def legacy_polarity_data(data):
@@ -341,34 +341,11 @@ class ApplyResult:
             self.written, len(self.errors))
 
 
-def board_serial(rows):
-    """The serial an export was read from (its BOARD_SERIAL_TAG comment),
-    or None."""
-    for row in rows:
-        if row.kind == 'comment' and row.text.startswith(BOARD_SERIAL_TAG):
-            try:
-                return int(row.text[len(BOARD_SERIAL_TAG):].strip(), 0)
-            except ValueError:
-                return None
-    return None
-
-
-def _node_serial(node):
-    """0x1018,4, or None when unreadable or 0 (never programmed: a 0 would
-    match every other unprogrammed board)."""
-    try:
-        v = struct.unpack('<I', bytes(node.sdo.upload(*SERIAL_OBJECT)[:4]))[0]
-    except Exception:
-        return None
-    return v or None
-
-
-def apply(node, rows, node_id=None, reporter=None, board_rows=None):
+def apply(node, rows, node_id=None, reporter=None):
     """Download every entry row to *node*.  Returns an ApplyResult.
 
-    PER_BOARD rows are written only when *board_rows* is true, or (None,
-    the default) when the CSV's board serial is *node*'s own; otherwise
-    they are skipped with one note, and the board keeps its calibration.
+    BOARD_CALIBRATION rows (an older CSV's) are skipped with one note: the
+    board keeps its own calibration.
 
     Rows should have been validated; one that does not encode is counted as
     an error and skipped.  SETTING_* rows change the SDO pacing and the ID
@@ -382,22 +359,19 @@ def apply(node, rows, node_id=None, reporter=None, board_rows=None):
     b2b_s = 0.001
     saved = (node.sdo.RESPONSE_TIMEOUT, getattr(node.sdo, 'MAX_RETRIES', None))
     entries = [r for r in rows if r.kind == 'entry']
-    if board_rows is None:
-        mine = board_serial(rows)
-        board_rows = bool(mine) and mine == _node_serial(node)
-    if not board_rows:
-        def own(r):
-            try:
-                return (int(r.index, 0), int(r.subindex, 0)) in PER_BOARD
-            except (TypeError, ValueError):
-                return False
-        skipped = [r for r in entries if not r.command and own(r)]
-        if skipped:
-            entries = [r for r in entries if r not in skipped]
-            reporter.note('Kept this board\'s own calibration: {} per-board '
-                          'row(s) skipped (current sense, electrical zero, '
-                          'polarity, runout) -- the CSV is not from this '
-                          'board'.format(len(skipped)))
+    def board_cal(r):
+        try:
+            return (int(r.index, 0), int(r.subindex, 0)) in BOARD_CALIBRATION
+        except (TypeError, ValueError):
+            return False
+    skipped = [r for r in entries if not r.command and board_cal(r)]
+    if skipped:
+        entries = [r for r in entries if r not in skipped]
+        reporter.note('Kept this board\'s own calibration: {} board '
+                      'calibration row(s) skipped (current sense, electrical '
+                      'zero, polarity, runout) -- a CSV configures the '
+                      'communication and the motor, not the board'.format(
+                          len(skipped)))
     try:
         for n, row in enumerate(entries):
             reporter.progress(100 * n // max(len(entries), 1))
@@ -476,8 +450,7 @@ class ConfigError(ValueError):
         self.errors = errors
 
 
-def load(node, path, node_id=None, reporter=None, force=False,
-         board_rows=None):
+def load(node, path, node_id=None, reporter=None, force=False):
     """Validate the CSV at *path* against *node*'s dictionary and apply it.
 
     Raises ConfigError on invalid lines unless *force*.  Returns an
@@ -495,7 +468,7 @@ def load(node, path, node_id=None, reporter=None, force=False,
         raise ConfigError(errors)
     for text in describe(errors):
         reporter.warn('Skipping invalid ' + text)
-    return apply(node, rows, node_id, reporter, board_rows)
+    return apply(node, rows, node_id, reporter)
 
 
 # ---------------------------------------------------------------------------
@@ -535,20 +508,22 @@ def build_from_template(node, template, output, reporter=None, date=None):
     out_lines = []
     count = 0
     entries = sum(1 for r in rows if r.kind == 'entry')
-    serial = _node_serial(node)
     for row in rows:
-        if row.kind == 'comment' and row.text.startswith(BOARD_SERIAL_TAG):
-            continue                    # a template made from an export
+        if row.kind == 'comment' and row.text.startswith(
+                '# Board serial (0x1018,4):'):
+            continue                    # a template made from an old export
         if row.kind == 'comment' and 'This is a CANopen' in row.text:
             out_lines.append('# This is a CANopen config template for - '
                              + output)
-            if serial is not None:
-                out_lines.append('{} {:#x}'.format(BOARD_SERIAL_TAG, serial))
-                serial = None
             continue
         if row.kind != 'entry' or len(row.fields) != 6:
             out_lines.append(row.text)
             continue
+        try:
+            if (int(row.index, 0), int(row.subindex, 0)) in BOARD_CALIBRATION:
+                continue                # a template made from an old export
+        except (TypeError, ValueError):
+            pass
         fields = list(row.fields)
         if row.comment.startswith('Version') and row.command == 'FILE_VERSION':
             fields[5] = 'V1.0.0 ({})'.format(date)
@@ -564,8 +539,6 @@ def build_from_template(node, template, output, reporter=None, date=None):
         buf = []
         csv.writer(_Collect(buf), lineterminator='').writerow(fields)
         out_lines.append(buf[0])
-    if serial is not None:              # the template had no header line
-        out_lines.insert(0, '{} {:#x}'.format(BOARD_SERIAL_TAG, serial))
     with open(output, 'w', newline='') as f:
         f.write('\n'.join(out_lines) + '\n')
     reporter.progress(100)
