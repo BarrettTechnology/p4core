@@ -1951,14 +1951,14 @@ DefaultValue=0
 [2381]
 ParameterName=Vel
 ObjectType=0x09
-SubNumber=6
+SubNumber=5
 
 [2381sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=5
+DefaultValue=4
 
 [2381sub1]
 ParameterName=VelKp
@@ -1987,13 +1987,6 @@ ObjectType=0x07
 DataType=0x0007
 AccessType=rw
 DefaultValue=0
-
-[2381sub5]
-ParameterName=SetpointWeight
-ObjectType=0x07
-DataType=0x0007
-AccessType=rw
-DefaultValue=0x3F800000
 
 [2382]
 ParameterName=Object2382
