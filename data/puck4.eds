@@ -1951,14 +1951,14 @@ DefaultValue=0
 [2381]
 ParameterName=Vel
 ObjectType=0x09
-SubNumber=5
+SubNumber=3
 
 [2381sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=4
+DefaultValue=2
 
 [2381sub1]
 ParameterName=VelKp
@@ -1969,20 +1969,6 @@ DefaultValue=0
 
 [2381sub2]
 ParameterName=VelKi
-ObjectType=0x07
-DataType=0x0007
-AccessType=rw
-DefaultValue=0
-
-[2381sub3]
-ParameterName=FrictionFF
-ObjectType=0x07
-DataType=0x0007
-AccessType=rw
-DefaultValue=0
-
-[2381sub4]
-ParameterName=FrictionBand
 ObjectType=0x07
 DataType=0x0007
 AccessType=rw
