@@ -120,10 +120,10 @@ Cutoff filter frequency (Hz),, 0x3025,2,INTEGER16, 50
 Temp Limited Current (mA),,0x3025,3,INTEGER16, 3000
 
 # Thermistor
-Resistance of R in Divider (Ohms),, 0x3026,1,UNSIGNED16,0
-Beta Value,,0x3026,2,UNSIGNED16,0
-Baseline Temperature (in degrees C),, 0x3026,3,UNSIGNED16,0
-Resistance of Thermistor at baseline Temperature (Ohms),,0x3026,4,UNSIGNED16,0
+Resistance of R in Divider (Ohms),, 0x3026,1,UNSIGNED16,3010
+Beta Value,,0x3026,2,UNSIGNED16,3950
+Baseline Temperature (in degrees C),, 0x3026,3,UNSIGNED16,25
+Resistance of Thermistor at baseline Temperature (Ohms),,0x3026,4,UNSIGNED16,10000
 
 # Profile mode
 Acceleration (cts/s^2),,0x6083,0,UNSIGNED32,500000
