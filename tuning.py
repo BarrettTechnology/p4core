@@ -333,6 +333,7 @@ def _f(node, index, sub):
 
 def read_params(node):
     """What the design needs, as stored on the puck (pucktuner's import)."""
+    from .calibrate import read_kt
     cal = node.sdo['Calibration']
     stored_bw = _u(node, *VEL_BANDWIDTH)
     try:
@@ -342,7 +343,7 @@ def read_params(node):
     return dict(
         resistance=cal['rt'].raw / 1000,           # mOhm -> ohm, l-l
         inductance=cal['lt'].raw / 1000000,        # uH -> H, l-l
-        kt=cal['kt'].raw,                          # mNm/A
+        kt=read_kt(node),                          # mNm/A
         poles=cal['poles'].raw,
         max_trq=node.sdo['RatedTorque'].raw,       # mNm
         pwm_hz=_u(node, 0x3001, 1),

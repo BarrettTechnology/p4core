@@ -18,6 +18,7 @@ arguments to the step functions), after clear_slope().
 """
 
 import math
+import struct
 import time
 
 from canopen.sdo.exceptions import SdoAbortedError
@@ -489,7 +490,7 @@ def calibrate_ezero(node, reporter=None, steps=16):
             hint = ('; check the configuration (poles, i_cal) and that output '
                     'friction is under the calibration torque ({:.0f} mNm)'
                     .format(node.sdo['Calibration']['i_cal'].raw
-                            * node.sdo['Calibration']['kt'].raw / 1000))
+                            * read_kt(node) / 1000))
         except Exception:
             pass
         raise CalibrationError('encoder zero failed, nothing stored: {}{}'
@@ -512,6 +513,48 @@ def calibrate_ezero(node, reporter=None, steps=16):
                       r['previous_polarity'], r['friction_split_deg'],
                       r['spread_max_deg'], r['spread_rms_deg']))
     return r
+
+
+#: Kt: 0x3011,14 is a REAL32 in mNm/A rms (stm32 c330a51).  Firmware before
+#: it has only 0x3011,4, a U16 in whole mNm/A, which newer firmware keeps as
+#: a rounded mirror (unsaved; a write to it sets ,14).
+KT = (0x3011, 14)
+KT_U16 = (0x3011, 4)
+
+
+def has_float_kt(node):
+    """True on firmware with the float Kt, 0x3011,14."""
+    try:
+        node.sdo.upload(*KT)
+        return True
+    except SdoAbortedError:
+        return False
+
+
+def read_kt(node):
+    """Kt in mNm/A rms, as a float: 0x3011,14, or 0x3011,4 on older firmware."""
+    try:
+        data = bytes(node.sdo.upload(*KT))
+    except SdoAbortedError:
+        data = bytes(node.sdo.upload(*KT_U16))
+        return float(int.from_bytes(data[:2], 'little'))
+    return struct.unpack('<f', data[:4])[0]
+
+
+def write_kt(node, mnm, save=False):
+    """Set Kt (mNm/A rms) where this firmware keeps it, rounded to whole
+    mNm/A on older firmware, and save it when *save*.  Returns where."""
+    mnm = float(mnm)
+    if not (0.0 <= mnm <= 1e6):
+        raise ValueError('Kt {} mNm/A is out of range'.format(mnm))
+    if has_float_kt(node):
+        where, data = KT, struct.pack('<f', mnm)
+    else:
+        where, data = KT_U16, struct.pack('<H', min(65535, int(round(mnm))))
+    node.sdo.download(*where, data)
+    if save:
+        save_single(node, *where)
+    return where
 
 
 #: The user polarity: 0x607E (DS402) holds 0x00, or 0xC0 to invert position

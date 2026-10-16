@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=01:56PM
+CreationTime=02:42PM
 CreationDate=10-16-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=01:56PM
+ModificationTime=02:42PM
 ModificationDate=10-16-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -1938,14 +1938,14 @@ DefaultValue=2
 [2380sub1]
 ParameterName=Kp
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
 [2380sub2]
 ParameterName=Ki
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
@@ -1964,14 +1964,14 @@ DefaultValue=2
 [2381sub1]
 ParameterName=VelKp
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
 [2381sub2]
 ParameterName=VelKi
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
@@ -2030,14 +2030,14 @@ DefaultValue=2
 [2383sub1]
 ParameterName=ImpedanceStiffnessKp
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
 [2383sub2]
 ParameterName=ImpedanceDampingKd
 ObjectType=0x07
-DataType=0x0007
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 
@@ -2829,14 +2829,14 @@ DefaultValue=0
 [3011]
 ParameterName=Calibration
 ObjectType=0x09
-SubNumber=14
+SubNumber=15
 
 [3011sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=13
+DefaultValue=14
 
 [3011sub1]
 ParameterName=e_zero
@@ -2926,6 +2926,13 @@ DefaultValue=0
 ParameterName=Lhf
 ObjectType=0x07
 DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[3011sube]
+ParameterName=kt_float
+ObjectType=0x07
+DataType=0x0008
 AccessType=rw
 DefaultValue=0
 

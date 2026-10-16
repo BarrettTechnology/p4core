@@ -94,7 +94,7 @@ Revision Number (bits 0-15: minor rev; bits 16-31: major rev),,0x1018,3,UNSIGNED
 Motor rated torque (mNm),,0x6076,0,UNSIGNED32,0
 Max motor vel (cts/sec),,0x6080,0,UNSIGNED32,500000
 Motor poles,,0x3011,3,UNSIGNED8,0
-Motor Kt (mNm/A),,0x3011,4,UNSIGNED16,27
+Motor Kt (mNm/A rms),,0x3011,14,REAL32,27
 Motor Rt (mOhm),,0x3011,5,UNSIGNED16,1000
 Motor Lt (uH),,0x3011,6,UNSIGNED16,100
 Motor J (gcm^2 * 2^15),,0x3011,7,UNSIGNED32,0
@@ -144,8 +144,8 @@ Position tracking fault window (cts),,0x2120,0,UNSIGNED32,0
 Position tracking fault timeout (ms),,0x2121,0,UNSIGNED16,500
 
 # Velocity control
-Kp,,0x2381,1,UNSIGNED32,0xFFFFFFFF
-Ki,,0x2381,2,UNSIGNED32,0xFFFFFFFF
+Kp,,0x2381,1,REAL32,0
+Ki,,0x2381,2,REAL32,0
 Encoder velocity low-pass filter (Hz),,0x2100,1,UNSIGNED16,50
 Velocity controller input low-pass filter (Hz),,0x2100,2,UNSIGNED16,0
 Velocity controller output low-pass filter (Hz),,0x2100,3,UNSIGNED16,0
@@ -155,8 +155,8 @@ Velocity tracking fault window (cts/sec),,0x2104,0,UNSIGNED16,0
 Velocity tracking fault timeout (ms),,0x2105,0,UNSIGNED16,100
 
 # Current control
-DQ-Axis current Kp,,0x2380,1,UNSIGNED32,0xFFFFFFFF
-DQ-Axis current Ki,,0x2380,2,UNSIGNED32,0xFFFFFFFF
+DQ-Axis current Kp,,0x2380,1,REAL32,0
+DQ-Axis current Ki,,0x2380,2,REAL32,0
 
 # Amplifier settings
 PWM freq (Hz),,0x3001,1,UNSIGNED32,16000

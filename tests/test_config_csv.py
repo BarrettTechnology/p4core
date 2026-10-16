@@ -297,5 +297,117 @@ class TestRemap(unittest.TestCase):
         self.assertEqual(node.values[(0x1401, 1)], 0x316)
 
 
+class TestReal32(unittest.TestCase):
+    """F32 objects (the gains, Kt) as REAL32 rows, and Kt on older firmware."""
+    GAINS = {(0x2380, 1): 0.13842642307281494, (0x2380, 2): 213.53012084960938,
+             (0x2381, 1): 0.003231385722756386, (0x2381, 2): 8.982659892353695e-06}
+
+    def test_format_is_the_shortest_float32_round_trip(self):
+        import struct
+        for v in list(self.GAINS.values()) + [31.27, 1250.0, 0.1, 1e-9]:
+            text = config_csv.format_real32(v)
+            self.assertLessEqual(len(text.replace('e-', '').replace('.', '')
+                                     .lstrip('0')), 9, text)
+            self.assertEqual(struct.pack('<f', float(text)), struct.pack('<f', v), text)
+        self.assertEqual(config_csv.format_real32(0.13842642307281494), '0.13842642')
+        self.assertEqual(config_csv.format_real32(31.27), '31.27')
+        self.assertEqual(config_csv.format_real32(0.0), '0')
+
+    def test_export_then_load_is_bit_exact(self):
+        import struct
+        src, dst = FakeNode(5), FakeNode(6)
+        for k, v in self.GAINS.items():
+            src.values[k] = v
+        src.values[(0x3011, 14)] = 31.27
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('\n'.join('x,,0x{:04X},{},REAL32,0'.format(*k)
+                              for k in list(self.GAINS) + [(0x3011, 14)]) + '\n')
+        out = tempfile.mktemp(suffix='.csv')
+        try:
+            config_csv.build_from_template(src, f.name, out)
+            with open(out) as g:
+                text = g.read()
+            self.assertIn('0x2380,1,REAL32,0.13842642', text)
+            self.assertIn('0x3011,14,REAL32,31.27', text)
+            self.assertTrue(config_csv.load(dst, out).ok)
+            for k in list(self.GAINS) + [(0x3011, 14)]:
+                self.assertEqual(struct.pack('<f', dst.values[k]),
+                                 struct.pack('<f', src.values[k]), k)
+        finally:
+            for path in (f.name, out):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_old_unsigned32_rows_still_load_the_same_bits(self):
+        node = FakeNode(5)
+        self.assertTrue(config_csv.apply(node, rows(
+            'Kp,,0x2381,1,UNSIGNED32,0x3b53c5a8')).ok)
+        self.assertAlmostEqual(node.values[(0x2381, 1)], 0.0032313857, places=9)
+
+    def test_kt_row_on_firmware_without_0x3011_14(self):
+        node = FakeNode(5)
+        node.readonly.add((0x3011, 14))
+        rep = RecordingReporter()
+        result = config_csv.apply(node, rows(
+            'Motor Kt,,0x3011,14,REAL32,31.6'), reporter=rep)
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(node.values[(0x3011, 4)], 32)
+        self.assertTrue(any('0x3011,4' in t for t in rep.texts('note')))
+
+    def test_kt_export_from_firmware_without_0x3011_14(self):
+        node = FakeNode(5)
+        node.values[(0x3011, 4)] = 31
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', delete=False) as f:
+            f.write('Motor Kt,,0x3011,14,REAL32,0\n')
+        out = tempfile.mktemp(suffix='.csv')
+        try:
+            config_csv.build_from_template(node, f.name, out)
+            with open(out) as g:
+                self.assertIn('0x3011,14,REAL32,31', g.read())
+        finally:
+            for path in (f.name, out):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_real32_out_of_range_is_invalid(self):
+        errors, _ = config_csv.validate(rows('x,,0x2380,1,REAL32,1e40'), 5)
+        self.assertEqual(errors, [(1, 10)])
+
+    def test_templates_type_the_gains_and_kt_real32(self):
+        floats = {(0x2380, 1), (0x2380, 2), (0x2381, 1), (0x2381, 2), (0x3011, 14)}
+        for name in paths.templates():
+            seen = {(int(r.index, 0), int(r.subindex, 0)): r.datatype
+                    for r in config_csv.read(paths.template(name))
+                    if r.kind == 'entry' and r.index and r.subindex}
+            self.assertNotIn((0x3011, 4), seen, name)
+            for k in floats:
+                self.assertEqual(seen.get(k), 'REAL32', (name, k))
+
+
+class TestKt(unittest.TestCase):
+    def test_float_kt(self):
+        from p4core import calibrate
+        node = FakeNode(5)
+        node.values[(0x3011, 14)] = 31.27
+        self.assertTrue(calibrate.has_float_kt(node))
+        self.assertAlmostEqual(calibrate.read_kt(node), 31.27, places=5)
+        self.assertEqual(calibrate.write_kt(node, 1250.5, save=True), (0x3011, 14))
+        self.assertEqual(node.values[(0x3011, 14)], 1250.5)
+        self.assertEqual(node.values[(0x1010, 5)] if (0x1010, 5) in node.values
+                         else node.get('Save', 'Single'), (0x3011 << 8) | 14)
+
+    def test_old_firmware_kt(self):
+        from p4core import calibrate
+        node = FakeNode(5)
+        node.values[(0x3011, 4)] = 31
+        node.readonly.add((0x3011, 14))
+        self.assertFalse(calibrate.has_float_kt(node))
+        self.assertEqual(calibrate.read_kt(node), 31.0)
+        self.assertEqual(calibrate.write_kt(node, 31.6), (0x3011, 4))
+        self.assertEqual(node.values[(0x3011, 4)], 32)
+        with self.assertRaises(ValueError):
+            calibrate.write_kt(node, -1)
+
+
 if __name__ == '__main__':
     unittest.main()

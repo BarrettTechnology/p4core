@@ -94,6 +94,12 @@ NODE_ID_OBJECT = (0x21B0, 0)
 LEGACY_POLARITY = (0x3013, 3)
 POLARITY = (0x607E, 0)
 
+#: Kt became a REAL32 at 0x3011,14 (mNm/A rms) with stm32 c330a51; older
+#: firmware has only the U16 0x3011,4 in whole mNm/A.  A ,14 row loads onto
+#: that firmware rounded into ,4, and export reads ,4 for it there.
+KT = (0x3011, 14)
+KT_U16 = (0x3011, 4)
+
 #: Board calibration: the current-sense calibration, electrical zero and
 #: winding polarity, and the encoder runout table.  A CSV configures the
 #: communication and the motor, never these: they belong to one board and are
@@ -232,7 +238,10 @@ def encode(datatype, data, node_id=None):
     except (SyntaxError, TypeError, KeyError, ZeroDivisionError) as exc:
         raise ValueError('bad value {!r}: {}'.format(data, exc)) from exc
     if datatype == 'REAL32':
-        return struct.pack('<f', float(value)), value
+        try:
+            return struct.pack('<f', float(value)), value
+        except (OverflowError, ValueError) as exc:
+            raise ValueError('{} does not fit REAL32'.format(data)) from exc
     if isinstance(value, float):
         if not value.is_integer():
             raise ValueError('{} is not an integer'.format(data))
@@ -250,6 +259,18 @@ def decode(datatype, raw):
     if datatype == 'REAL32':
         return struct.unpack('<f', raw[:4])[0]
     return int.from_bytes(raw, 'little', signed=datatype.startswith('INTEGER'))
+
+
+def format_real32(value):
+    """A float32 as the fewest significant digits (6 to 9, usually 7) that
+    read back to the same 32 bits: 0.13842642, not 0.13842642307281494."""
+    value = float(value)
+    bits = struct.pack('<f', value)
+    for digits in range(6, 10):
+        text = '{:.{}g}'.format(value, digits)
+        if struct.pack('<f', float(text)) == bits:
+            return text
+    return repr(value)
 
 
 def _int(text):
@@ -418,6 +439,16 @@ def apply(node, rows, node_id=None, reporter=None):
                     result.errors.append('{}: no SDO response (0x{:04X},{})'
                                          .format(where, index, sub))
                 except SdoAbortedError as exc:
+                    if (index, sub) == KT:
+                        try:
+                            mnm = min(65535, int(round(float(value))))
+                            node.sdo.download(*KT_U16, mnm.to_bytes(2, 'little'))
+                            result.written += 1
+                            reporter.note('{}: this firmware has no 0x3011,14: Kt '
+                                          'written to 0x3011,4 as {} mNm/A'.format(where, mnm))
+                            continue
+                        except (SdoAbortedError, SdoCommunicationError):
+                            pass
                     if (index, sub) == LEGACY_POLARITY:
                         polarity = legacy_polarity_data(data)
                         try:
@@ -479,7 +510,7 @@ def _format(index, datatype, value):
     style: 32-bit words in the manufacturer (0x2xxx) range and INTEGER32 in
     the profile range as hex, everything else decimal; zero as 0."""
     if datatype == 'REAL32':
-        return repr(float(value))
+        return format_real32(value)
     if value == 0:
         return '0'
     if datatype in ('INTEGER32', 'UNSIGNED32') and (
@@ -531,8 +562,13 @@ def build_from_template(node, template, output, reporter=None, date=None):
                 not row.index.lower().startswith('0x1'):
             reporter.check_abort()
             index, sub = int(row.index, 0), int(row.subindex, 0)
-            raw = node.sdo.upload(index, sub)
-            value = decode(row.datatype, raw)
+            try:
+                raw = node.sdo.upload(index, sub)
+                value = decode(row.datatype, raw)
+            except SdoAbortedError:
+                if (index, sub) != KT:
+                    raise
+                value = float(int.from_bytes(node.sdo.upload(*KT_U16)[:2], 'little'))
             fields[5] = _format(row.index, row.datatype, value)
             count += 1
             reporter.progress(100 * count // max(entries, 1))
