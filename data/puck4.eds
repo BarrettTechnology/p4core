@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=12:48PM
+CreationTime=01:56PM
 CreationDate=10-16-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=12:48PM
+ModificationTime=01:56PM
 ModificationDate=10-16-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -4064,14 +4064,14 @@ DefaultValue=0
 [302E]
 ParameterName=CogCompensation
 ObjectType=0x09
-SubNumber=12
+SubNumber=16
 
 [302Esub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=11
+DefaultValue=15
 
 [302Esub1]
 ParameterName=CoggingCompensationActive
@@ -4145,6 +4145,34 @@ DefaultValue=0
 
 [302Esubb]
 ParameterName=CoggingCompensationLead
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[302Esubc]
+ParameterName=CogBin3As
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+
+[302Esubd]
+ParameterName=CogBin3K
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[302Esube]
+ParameterName=CogBin3Ac
+ObjectType=0x07
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+
+[302Esubf]
+ParameterName=CoggingCompensationFade
 ObjectType=0x07
 DataType=0x0006
 AccessType=rw
