@@ -4085,14 +4085,14 @@ DefaultValue=0
 [302E]
 ParameterName=CogCompensation
 ObjectType=0x09
-SubNumber=16
+SubNumber=17
 
 [302Esub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=15
+DefaultValue=16
 
 [302Esub1]
 ParameterName=CoggingCompensationActive
@@ -4198,6 +4198,13 @@ ObjectType=0x07
 DataType=0x0006
 AccessType=rw
 DefaultValue=0
+
+[302Esub10]
+ParameterName=CogBinUnit
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+DefaultValue=1
 
 [603F]
 ParameterName=LastError
