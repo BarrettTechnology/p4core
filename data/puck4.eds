@@ -1978,14 +1978,14 @@ DefaultValue=0
 [2382]
 ParameterName=Object2382
 ObjectType=0x09
-SubNumber=5
+SubNumber=6
 
 [2382sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=4
+DefaultValue=5
 
 [2382sub1]
 ParameterName=Kp
@@ -2012,6 +2012,13 @@ DefaultValue=0
 ParameterName=Outmul
 ObjectType=0x07
 DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[2382sub5]
+ParameterName=VelffSource
+ObjectType=0x07
+DataType=0x0005
 AccessType=rw
 DefaultValue=0
 
@@ -3185,14 +3192,14 @@ DefaultValue=0
 [3016]
 ParameterName=DebugCurrentSenseSampleTriggerTelemetry
 ObjectType=0x09
-SubNumber=12
+SubNumber=13
 
 [3016sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=11
+DefaultValue=12
 
 [3016sub1]
 ParameterName=DebugTim1Ccr4Written
@@ -3269,6 +3276,13 @@ ParameterName=DbgWidestPulse
 ObjectType=0x07
 DataType=0x0006
 AccessType=ro
+DefaultValue=0
+
+[3016subc]
+ParameterName=DiagDecouplingTermsOff
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
 DefaultValue=0
 
 [3017]
