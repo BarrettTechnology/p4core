@@ -4,11 +4,11 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=02:42PM
-CreationDate=10-16-2026
+CreationTime=09:21AM
+CreationDate=10-21-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=02:42PM
-ModificationDate=10-16-2026
+ModificationTime=09:21AM
+ModificationDate=10-21-2026
 ModifiedBy=scripts/gen_eds.py
 
 [DeviceInfo]
@@ -2946,14 +2946,14 @@ DefaultValue=0
 [3012]
 ParameterName=Encoder
 ObjectType=0x09
-SubNumber=4
+SubNumber=5
 
 [3012sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=3
+DefaultValue=4
 
 [3012sub1]
 ParameterName=RawPosition
@@ -2976,17 +2976,24 @@ DataType=0x0004
 AccessType=ro
 DefaultValue=0
 
+[3012sub4]
+ParameterName=PositionSubCount
+ObjectType=0x07
+DataType=0x0008
+AccessType=ro
+DefaultValue=0
+
 [3013]
 ParameterName=EncoderConfig
 ObjectType=0x09
-SubNumber=10
+SubNumber=11
 
 [3013sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=10
+DefaultValue=11
 
 [3013sub1]
 ParameterName=Resolution
@@ -3050,6 +3057,13 @@ ObjectType=0x07
 DataType=0x0003
 AccessType=ro
 DefaultValue=0
+
+[3013subb]
+ParameterName=SubCountPosition
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=1
 
 [3015]
 ParameterName=CurrentInjection
