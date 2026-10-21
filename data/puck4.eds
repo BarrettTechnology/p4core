@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=10:03AM
+CreationTime=10:58AM
 CreationDate=10-21-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=10:03AM
+ModificationTime=10:58AM
 ModificationDate=10-21-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -1952,14 +1952,14 @@ DefaultValue=0
 [2381]
 ParameterName=Vel
 ObjectType=0x09
-SubNumber=4
+SubNumber=5
 
 [2381sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=3
+DefaultValue=4
 
 [2381sub1]
 ParameterName=VelKp
@@ -1977,6 +1977,13 @@ DefaultValue=0
 
 [2381sub3]
 ParameterName=CoulombFrictionFeedForward
+ObjectType=0x07
+DataType=0x0008
+AccessType=rw
+DefaultValue=0
+
+[2381sub4]
+ParameterName=SettleKi
 ObjectType=0x07
 DataType=0x0008
 AccessType=rw
