@@ -159,7 +159,7 @@ DQ-Axis current Kp,,0x2380,1,REAL32,0
 DQ-Axis current Ki,,0x2380,2,REAL32,0
 
 # Amplifier settings
-PWM freq (Hz),,0x3001,1,UNSIGNED32,16000
+PWM freq (Hz),,0x3001,1,UNSIGNED32,20000 # STM32 floor 20000 (stm32 aabf97d)
 Dead time (ns),,0x3001,2,UNSIGNED16,250 # 211ns is exact (confirm this)
 Max prop delay (ns),,0x3001,3,UNSIGNED16,180
 Delta prop delay trim (ns),,0x3001,4,UNSIGNED16,0
@@ -183,6 +183,6 @@ Encoder resolution (cts),,0x3013,1,UNSIGNED32,4096
 Encoder user zero (cts),,0x3013,2,UNSIGNED32,0
 Encoder type,,0x3013,4,UNSIGNED8,0
 Encoder lag factor,,0x3013,5,UNSIGNED16,0
-Encoder hardware filter,,0x3013,6,UNSIGNED8,0xA0 # MA782 = 0x30; MA736 = 0xA0
+Encoder hardware filter,,0x3013,6,UNSIGNED8,0xA0 # MA782 = 0x30; MA736 = 0xA0; MA735 = 0x77 (refuses MA736 values)
 
 User polarity (0xC0 inverts),,0x607E,0,UNSIGNED8,0x00
