@@ -557,6 +557,62 @@ def write_kt(node, mnm, save=False):
     return where
 
 
+#: CiA 402 units (stm32 ecdc33c, "DS402 stage 2"): every torque and current
+#: per-mille (0x6071-0x6074, 0x6077, 0x6078, 0x3010,6, 0x60B2, 0x60E0/1,
+#: 0x6087, the velocity and impedance gains) is of the RATED current 0x6075
+#: (= i_cont, mA) and the rated torque 0x6076 = Kt x 0x6075 / sqrt2, both
+#: read-only and derived.  Older firmware has no 0x6075: its current per-mille
+#: is of i_peak (0x3011,9) and its torque per-mille of a writable 0x6076 the
+#: host chose.  0x3011,15 is the working peak (min of i_peak, amp.i_max and
+#: the sense; stage 1), absent before it.
+RATED_CURRENT = (0x6075, 0)
+RATED_TORQUE = (0x6076, 0)
+WORKING_PEAK = (0x3011, 15)
+I_PEAK = (0x3011, 9)
+I_CONT = (0x3011, 8)
+SQRT2 = 2.0 ** 0.5
+
+
+def _u(node, index, sub, n):
+    return int.from_bytes(bytes(node.sdo.upload(index, sub))[:n], 'little')
+
+
+def has_rated_units(node):
+    """True on firmware whose per-mille are of the rated current (0x6075)."""
+    try:
+        node.sdo.upload(*RATED_CURRENT)
+        return True
+    except SdoAbortedError:
+        return False
+
+
+def working_peak_ma(node):
+    """The peak current the drive works to (mA): 0x3011,15, or i_peak on
+    firmware without it."""
+    try:
+        return _u(node, *WORKING_PEAK, 2)
+    except SdoAbortedError:
+        return _u(node, *I_PEAK, 2)
+
+
+def permille_base_ma(node):
+    """What a current per-mille (0x6078, 0x3010,6, 0x6073) is of, in mA: the
+    rated current 0x6075, or i_peak on older firmware.  0 = no scale."""
+    try:
+        return _u(node, *RATED_CURRENT, 4)
+    except SdoAbortedError:
+        return _u(node, *I_PEAK, 2)
+
+
+def rated_torque_mnm(node):
+    """What a torque per-mille is of, in mNm.  On rated-unit firmware this is
+    computed as the firmware does (Kt x 0x6075 / sqrt2, unrounded: 0x6076
+    publishes it in whole mNm); older firmware's writable 0x6076 as is."""
+    if has_rated_units(node):
+        return read_kt(node) * _u(node, *RATED_CURRENT, 4) * 1e-3 / SQRT2
+    return float(_u(node, *RATED_TORQUE, 4))
+
+
 #: The user polarity: 0x607E (DS402) holds 0x00, or 0xC0 to invert position
 #: and velocity together.  Firmware before stm32 8a366c6 kept a +-1 sign at
 #: 0x3013,3 instead (0x607E was there, but unused).

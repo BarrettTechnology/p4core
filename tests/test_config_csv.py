@@ -394,6 +394,53 @@ class TestReal32(unittest.TestCase):
                 if os.path.exists(path):
                     os.unlink(path)
 
+    # Torque units (stm32 ecdc33c): per-mille of the derived rated torque
+    OLD_GAINS = ('Motor rated torque (mNm),,0x6076,0,UNSIGNED32,622',
+                 'Motor Kt,,0x3011,14,REAL32,31.07',
+                 'i_cont,,0x3011,8,UNSIGNED16,5327',
+                 'Kp,,0x2381,1,REAL32,0.00346',
+                 'Tc,,0x2381,3,REAL32,10',
+                 'Slope,,0x6087,0,UNSIGNED32,20000')
+
+    def _rated_node(self):
+        node = FakeNode(8, {(0x6075, 0): 5327})
+        node.readonly.update([(0x6075, 0), (0x6076, 0)])
+        return node
+
+    def test_old_csv_gains_convert_on_rated_firmware(self):
+        node = self._rated_node()
+        rep = RecordingReporter()
+        result = config_csv.apply(node, rows("\n".join(self.OLD_GAINS)), reporter=rep)
+        self.assertTrue(result.ok, result.errors)
+        f = 622 / (31.07 * 5.327 / 2 ** 0.5)
+        self.assertAlmostEqual(node.values[(0x2381, 1)], 0.00346 * f, places=7)
+        self.assertAlmostEqual(node.values[(0x2381, 3)], 10 * f, places=4)
+        self.assertEqual(node.values[(0x6087, 0)], round(20000 * f))
+        self.assertNotIn((0x6076, 0), [w[0] for w in node.writes])
+        self.assertTrue(any('x {:.4f}'.format(f) in t for t in rep.texts('note')))
+
+    def test_derived_rated_torque_reloads_unchanged(self):
+        node = self._rated_node()
+        rated = 31.07 * 5.327 / 2 ** 0.5
+        lines = list(self.OLD_GAINS)
+        lines[0] = 'Motor rated torque (mNm),,0x6076,0,UNSIGNED32,{}'.format(round(rated))
+        self.assertTrue(config_csv.apply(node, rows("\n".join(lines))).ok)
+        self.assertAlmostEqual(node.values[(0x2381, 1)], 0.00346, delta=0.00346 * 3e-3)
+
+    def test_old_firmware_writes_rated_torque_and_leaves_gains(self):
+        node = FakeNode(5)
+        self.assertTrue(config_csv.apply(node, rows("\n".join(self.OLD_GAINS))).ok)
+        self.assertEqual(node.values[(0x6076, 0)], 622)
+        self.assertAlmostEqual(node.values[(0x2381, 1)], 0.00346, places=7)
+        self.assertEqual(node.values[(0x6087, 0)], 20000)
+
+    def test_template_zero_rated_torque_is_not_a_scale(self):
+        node = self._rated_node()
+        lines = list(self.OLD_GAINS)
+        lines[0] = 'Motor rated torque (mNm),,0x6076,0,UNSIGNED32,0'
+        self.assertTrue(config_csv.apply(node, rows("\n".join(lines))).ok)
+        self.assertAlmostEqual(node.values[(0x2381, 1)], 0.00346, places=7)
+
     def test_real32_out_of_range_is_invalid(self):
         errors, _ = config_csv.validate(rows('x,,0x2380,1,REAL32,1e40'), 5)
         self.assertEqual(errors, [(1, 10)])

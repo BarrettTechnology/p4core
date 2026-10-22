@@ -261,7 +261,8 @@ def auto_velocity_bandwidth(vel_filter_hz, current_margin=999.0, log=None):
 def velocity_gains(j, max_trq, spd_trq_grad=0.0, no_load_spd=0, nominal_spd=0,
                    cont_torque=0, zeta=1.0, bandwidth_hz=None, vel_filter_hz=0,
                    current_margin=999.0, gear_ratio=1.0, log=None):
-    """The velocity-loop PI.  *j* in g.cm^2, *max_trq* (RatedTorque) in mNm.
+    """The velocity-loop PI.  *j* in g.cm^2, *max_trq* in mNm: what the velocity PI's
+    per-mille output is of (RatedTorque; on rated-unit firmware Kt x i_cont / sqrt2).
 
     *bandwidth_hz* None designs it (auto_velocity_bandwidth); a number is
     the user's.  A zero/NaN *spd_trq_grad* is derived from the speeds.
@@ -333,7 +334,7 @@ def _f(node, index, sub):
 
 def read_params(node):
     """What the design needs, as stored on the puck (pucktuner's import)."""
-    from .calibrate import read_kt
+    from .calibrate import read_kt, rated_torque_mnm
     cal = node.sdo['Calibration']
     stored_bw = _u(node, *VEL_BANDWIDTH)
     try:
@@ -345,7 +346,7 @@ def read_params(node):
         inductance=cal['lt'].raw / 1000000,        # uH -> H, l-l
         kt=read_kt(node),                          # mNm/A
         poles=cal['poles'].raw,
-        max_trq=node.sdo['RatedTorque'].raw,       # mNm
+        max_trq=rated_torque_mnm(node),            # mNm: what a torque per-mille is of
         pwm_hz=_u(node, 0x3001, 1),
         j=_u(node, 0x3011, 7) / 2 ** 15,           # g.cm^2
         spd_trq_grad=_u(node, 0x3024, 1) / 100,    # rpm/mNm

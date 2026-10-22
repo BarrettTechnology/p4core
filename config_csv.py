@@ -121,6 +121,72 @@ BOARD_CALIBRATION = frozenset(
     [(0x3011, 1), (0x3011, 2)] + [(0x3027, s) for s in range(1, 10)])
 
 
+#: Torque per-mille changed base with stm32 ecdc33c: from a writable 0x6076
+#: the host chose (a "max torque", often Kt x i_peak / sqrt2) to the rated
+#: torque Kt x i_cont / sqrt2 the drive derives (0x6075 rated current, 0x6076
+#: read-only).  On that firmware a CSV's 0x6076 row is not written; it says
+#: what the CSV's torque-unit rows were per-mille OF, and they are rescaled by
+#: its value / the rated torque this CSV's Kt and i_cont give -- the same
+#: conversion the firmware runs at boot on NV gains (0x2386,5).  A CSV
+#: exported from such firmware carries the derived 0x6076: factor 1.
+RATED_CURRENT = (0x6075, 0)
+RATED_TORQUE = (0x6076, 0)
+I_CONT = (0x3011, 8)
+TORQUE_UNIT_ROWS = frozenset([(0x2381, 1), (0x2381, 2), (0x2381, 3), (0x2381, 4),
+                              (0x2383, 1), (0x2383, 2), (0x6087, 0)])
+
+
+def _key(row):
+    try:
+        return int(row.index, 0), int(row.subindex, 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def torque_unit_factor(node, rows, node_id=None):
+    """(factor, why) to rescale TORQUE_UNIT_ROWS for this drive, or (None,
+    why): None when the drive is older firmware (0x6076 is still the base),
+    the CSV has no nonzero 0x6076, or Kt/i_cont are unknown."""
+    try:
+        node.sdo.upload(*RATED_CURRENT)
+    except SdoAbortedError:
+        return None, 'older firmware: 0x6076 is written as the base'
+    vals = {}
+    for r in rows:
+        k = _key(r) if r.kind == 'entry' and not r.command else None
+        if k in (RATED_TORQUE, KT, KT_U16, I_CONT):
+            try:
+                vals[k] = encode(r.datatype, r.data, node_id)[1]
+            except (ValueError, IndexError):
+                pass
+    old = vals.get(RATED_TORQUE)
+    if not old:
+        return None, 'no RatedTorque row'
+    kt = vals.get(KT, vals.get(KT_U16))
+    if kt is None:
+        try:
+            kt = struct.unpack('<f', bytes(node.sdo.upload(*KT))[:4])[0]
+        except SdoAbortedError:
+            kt = int.from_bytes(bytes(node.sdo.upload(*KT_U16))[:2], 'little')
+    i_cont = vals.get(I_CONT)
+    if i_cont is None:
+        i_cont = int.from_bytes(bytes(node.sdo.upload(*I_CONT))[:2], 'little')
+    if not (kt and kt > 0 and i_cont and 0 < i_cont < 0xFFFF):
+        return None, 'Kt {} / i_cont {} unknown: torque rows left as they are'.format(kt, i_cont)
+    rated = float(kt) * i_cont * 1e-3 / 2.0 ** 0.5
+    return float(old) / rated, 'RatedTorque {} mNm in the CSV, rated torque {:.2f} mNm ' \
+        '(Kt {:.4g} x i_cont {} mA / sqrt2)'.format(old, rated, float(kt), i_cont)
+
+
+def _scaled(row, factor, node_id):
+    """(bytes, value) for a TORQUE_UNIT_ROWS row times *factor*."""
+    value = encode(row.datatype, row.data, node_id)[1] * factor
+    if row.datatype == 'REAL32':
+        return struct.pack('<f', value), value
+    value = int(round(min(max(value, 0), 0xFFFFFFFF)))
+    return value.to_bytes(4, 'little'), value
+
+
 def legacy_polarity_data(data):
     """0x607E's byte for a 0x3013,3 sign: 0xC0 for -1, else 0x00."""
     return bytes([0xC0 if data[:1] == b'\xff' else 0x00])
@@ -401,6 +467,13 @@ def apply(node, rows, node_id=None, reporter=None):
                       'zero, polarity, runout) -- a CSV configures the '
                       'communication and the motor, not the board'.format(
                           len(skipped)))
+    factor, why = torque_unit_factor(node, entries, node_id)
+    rated_fw = why != 'older firmware: 0x6076 is written as the base'
+    if factor is not None:
+        reporter.note('Torque units: this firmware\'s per-mille are of the rated '
+                      'torque; gains and the torque slope x {:.4f} ({})'.format(factor, why))
+    elif rated_fw and why != 'no RatedTorque row':
+        reporter.warn('Torque units: ' + why)
     try:
         for n, row in enumerate(entries):
             reporter.progress(100 * n // max(len(entries), 1))
@@ -436,6 +509,10 @@ def apply(node, rows, node_id=None, reporter=None):
                 pass
             else:
                 index, sub = int(row.index, 0), int(row.subindex, 0)
+                if rated_fw and (index, sub) == RATED_TORQUE:
+                    continue    # derived on this firmware (torque_unit_factor)
+                if factor is not None and (index, sub) in TORQUE_UNIT_ROWS:
+                    data, value = _scaled(row, factor, node_id)
                 try:
                     node.sdo.download(index, sub, data)
                     result.written += 1
