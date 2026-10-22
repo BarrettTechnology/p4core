@@ -104,6 +104,26 @@ class FakeNode:
         return Record(self, name)
 
 
+class RatedFakeNode(FakeNode):
+    """Firmware from stm32 ecdc33c: Motor/id is per-mille of the rated current
+    0x6075 and pins at the working peak's per-mille (0x3011,15), not 1000."""
+
+    RATED_MA = 9428
+
+    def upload(self, index, sub):
+        rows = {(0x6075, 0): self.RATED_MA, (0x3011, 15): int(self.I_PEAK_MA)}
+        if (index, sub) not in rows:
+            raise KeyError((index, sub))
+        return rows[(index, sub)].to_bytes(4, 'little')
+
+    def on_write(self, key, value):
+        if key == ('Motor', 'ud'):
+            self.ud = value
+            amps = value * self.ohms_per_ud
+            self.id_permille = min(amps / (self.RATED_MA / 1000.0) * 1000.0,
+                                   1000.0 * self.I_PEAK_MA / self.RATED_MA)
+
+
 class NoWait(Reporter):
     def sleep(self, seconds):
         self.check_abort()
@@ -173,6 +193,32 @@ class TestCalibrationRamp(unittest.TestCase):
         reached = node.id_permille / 1000.0 * node.I_PEAK_MA
         self.assertLessEqual(reached, node.I_PEAK_MA * 1.05)
         self.assertLess(ud, calibrate.RAMP_UD_MAX)
+
+
+class TestRatedUnitFirmware(unittest.TestCase):
+    """Per-mille of 0x6075: read as of i_peak, the ramp stopped at a third of i_cal."""
+
+    def test_reaches_i_cal(self):
+        node = RatedFakeNode()
+        ramp(node)
+        reached = node.id_permille / 1000.0 * node.RATED_MA
+        self.assertGreaterEqual(reached, node.I_CAL_MA)
+        self.assertLess(reached, node.I_CAL_MA * 1.1)
+
+    def test_1000_permille_is_not_saturation(self):
+        node = RatedFakeNode()
+        node.I_CAL_MA = 1.5 * node.RATED_MA     # 1500 per-mille, under the 3000 peak
+        ramp(node)
+        self.assertGreater(node.id_permille, 1000)
+
+    def test_stops_at_the_peak_permille(self):
+        node = RatedFakeNode(ohms_per_ud=1.0)   # one step pins the reading
+        node.I_CAL_MA = node.I_PEAK_MA * 10
+        self.assertEqual(ramp(node), calibrate.RAMP_UD_STEP)
+
+    def test_id_scale(self):
+        self.assertEqual(calibrate.id_scale(RatedFakeNode()), (9428, 3000))
+        self.assertEqual(calibrate.id_scale(FakeNode()), (28284.0, 1000))
 
 
 class TestGainCalibrationDeEnergises(unittest.TestCase):

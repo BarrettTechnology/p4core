@@ -52,7 +52,8 @@ ENCODER_MAX_JITTER = 8      # counts over a second at rest
 RAMP_UD_STEP = 100
 RAMP_UD_MAX = 32000
 RAMP_SETTLE_S = 0.05
-#: Per-mille of i_peak at which the exported id is taken as saturated.
+#: Per-mille of i_peak at which the exported id is taken as saturated on
+#: firmware before stm32 ecdc33c (later: id_scale()'s peak per-mille).
 RAMP_ID_SATURATED = 1000
 #: The proportional ramp (newton=True): per-step ud bounds, first step, settle.
 NEWTON_STEP_MIN = 100
@@ -222,7 +223,7 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
     reporter = reporter or Reporter()
     sdo = node.sdo
     target = calibration_current(node)
-    i_peak = sdo['Calibration']['i_peak'].raw
+    base_ma, saturated = id_scale(node)
     ud = 0
     i_ma = 0.0
     while ud < RAMP_UD_MAX:
@@ -237,10 +238,10 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
         sdo['Motor']['ud'].raw = ud
         reporter.sleep(NEWTON_SETTLE_S if newton else RAMP_SETTLE_S)
         i_d = sdo['Motor']['id'].raw
-        i_ma = i_d / 1000.0 * i_peak
+        i_ma = i_d / 1000.0 * base_ma
         if progress and target > 0:
             progress(min(1.0, max(0.0, i_ma / target)))
-        if i_d >= RAMP_ID_SATURATED or i_ma >= target:
+        if i_d >= saturated or i_ma >= target:
             break
     return ud
 
@@ -399,7 +400,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     sdo['Alpha']['Gainfactor'].raw = GAIN_NOMINAL
     sdo['Beta']['Gainfactor'].raw = GAIN_NOMINAL
     target = calibration_current(node)
-    i_peak = sdo['Calibration']['i_peak'].raw
+    base_ma = id_scale(node)[0]
     samples, ids = [], []
     try:
         _enable(sdo)
@@ -418,7 +419,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
             reporter.sleep(step_dwell_s)
             samples.append((2.0 * math.pi * k / GAIN_FIT_STEPS,
                             sdo['Alpha']['Filtered'].raw, sdo['Beta']['Filtered'].raw))
-            ids.append(sdo['Motor']['id'].raw / 1000.0 * i_peak)
+            ids.append(sdo['Motor']['id'].raw / 1000.0 * base_ma)
             reporter.progress(30 + 65 * (k + 1) // GAIN_FIT_STEPS)
     except BaseException:
         restore()
@@ -602,6 +603,25 @@ def permille_base_ma(node):
         return _u(node, *RATED_CURRENT, 4)
     except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
         return _u(node, *I_PEAK, 2)
+
+
+def id_scale(node):
+    """(base mA, saturation per-mille) of the exported d-axis current
+    Motor/id (0x3010,6).  Rated-unit firmware: per-mille of 0x6075, pinned at
+    the working peak's per-mille (3000 for a P4-42 at i_cont 9428); older
+    firmware: per-mille of i_peak, pinned at 1000.  Probes that a test fake
+    cannot answer (no upload, no row) read as older firmware."""
+    try:
+        rated = _u(node, *RATED_CURRENT, 4)
+    except (SdoAbortedError, KeyError, AttributeError):
+        rated = 0
+    if not rated:
+        return node.sdo['Calibration']['i_peak'].raw, RAMP_ID_SATURATED
+    try:
+        peak = _u(node, *WORKING_PEAK, 2)
+    except (SdoAbortedError, KeyError, AttributeError):
+        peak = node.sdo['Calibration']['i_peak'].raw
+    return rated, int(1000.0 * peak / rated)
 
 
 def rated_torque_mnm(node):
