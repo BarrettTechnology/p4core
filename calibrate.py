@@ -636,6 +636,49 @@ def rated_torque_mnm(node):
         return float(_u(node, *RATED_TORQUE, 4))
 
 
+
+#: The rows whose values are per-mille of the rated torque (velocity PI, Tc
+#: feed-forward, settle ki, impedance gains, 0x6087 slope), with their types.
+TORQUE_UNIT_ROWS = (((0x2381, 1), 'f'), ((0x2381, 2), 'f'), ((0x2381, 3), 'f'),
+                    ((0x2381, 4), 'f'), ((0x2383, 1), 'f'), ((0x2383, 2), 'f'),
+                    ((0x6087, 0), 'I'))
+
+
+def rescale_torque_units(node, factor):
+    """Multiply every TORQUE_UNIT_ROWS value on the drive (RAM) by *factor*;
+    0 and NaN (unset) stay.  Returns the rows changed."""
+    changed = []
+    for (idx, sub), fmt in TORQUE_UNIT_ROWS:
+        try:
+            v = struct.unpack('<' + fmt, bytes(node.sdo.upload(idx, sub))[:4])[0]
+        except (SdoAbortedError, KeyError):
+            continue
+        if not v or v != v:
+            continue
+        v = v * factor if fmt == 'f' else min(0xFFFFFFFF, int(round(v * factor)))
+        node.sdo.download(idx, sub, struct.pack('<' + fmt, v))
+        changed.append((idx, sub))
+    return changed
+
+
+def write_i_cont(node, i_cont_ma):
+    """Write i_cont (0x3011,8, mA) and keep the torque the gains command.
+
+    On rated-unit firmware the rated torque is Kt x i_cont / sqrt2, so a new
+    i_cont changes what every torque per-mille means: TORQUE_UNIT_ROWS are
+    scaled by old / new rated so the loops' torque per unit error stays as
+    tuned.  The drive re-derives 0x6075/0x6076 in IDLE.  Returns that factor
+    (1.0 on older firmware, where 0x6076 is the base and i_cont is not)."""
+    i_cont_ma = int(round(i_cont_ma))
+    rated = has_rated_units(node)
+    was = _u(node, *I_CONT, 2) if rated else 0
+    node.sdo.download(*I_CONT, i_cont_ma.to_bytes(2, 'little'))
+    if not rated or not was or not i_cont_ma or was == i_cont_ma:
+        return 1.0
+    factor = float(was) / i_cont_ma
+    rescale_torque_units(node, factor)
+    return factor
+
 #: The user polarity: 0x607E (DS402) holds 0x00, or 0xC0 to invert position
 #: and velocity together.  Firmware before stm32 8a366c6 kept a +-1 sign at
 #: 0x3013,3 instead (0x607E was there, but unused).
