@@ -242,6 +242,7 @@ class TestBoardCalibrationRows(unittest.TestCase):
         'Alpha gain factor,,0x3008,6,UNSIGNED16,0',
         'Electrical zero,,0x3011,1,UNSIGNED16,100',
         'Comp active,,0x3027,1,UNSIGNED16,1',
+        'Cogging active,,0x302E,1,UNSIGNED8,1',
     ])
 
     def written(self, node):
@@ -454,6 +455,63 @@ class TestReal32(unittest.TestCase):
             self.assertNotIn((0x3011, 4), seen, name)
             for k in floats:
                 self.assertEqual(seen.get(k), 'REAL32', (name, k))
+
+
+class TestOptionalRows(unittest.TestCase):
+    """Friction ff and settle ki (0x2381,3/4): templates carry them, and
+    firmware without them is a note on load and keeps the template's 0 on
+    export."""
+    TEXT = ('Temp,,0x220A,0,UNSIGNED8,85\n'
+            'Coulomb friction feed-forward,,0x2381,3,REAL32,12.5\n'
+            'Settle ki,,0x2381,4,REAL32,0.0004')
+
+    def test_templates_carry_them(self):
+        for name in paths.templates():
+            keys = {(int(r.index, 0), int(r.subindex, 0))
+                    for r in config_csv.read(paths.template(name))
+                    if r.kind == 'entry' and r.index and r.subindex}
+            self.assertTrue(config_csv.OPTIONAL_ROWS <= keys, name)
+
+    def test_load_on_firmware_without_them_is_a_note(self):
+        from canopen.sdo.exceptions import SdoAbortedError
+        node = FakeNode(5)
+
+        def missing(value):
+            raise SdoAbortedError(0x06090011)
+        for key in config_csv.OPTIONAL_ROWS:
+            node.write_hooks[key] = missing
+        rep = RecordingReporter()
+        result = config_csv.apply(node, rows(self.TEXT), reporter=rep)
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(sum('skipped' in t and '0x2381' in t
+                             for t in rep.texts('note')), 2)
+
+    def test_other_aborts_stay_errors(self):
+        node = FakeNode(5)
+        node.readonly.add((0x2381, 3))
+        result = config_csv.apply(node, rows(self.TEXT))
+        self.assertEqual(len(result.errors), 1)
+
+    def test_export_keeps_the_template_value_without_them(self):
+        src = FakeNode(5)
+        src.values[(0x220A, 0)] = (85).to_bytes(1, 'little')
+        src.values[(0x2381, 4)] = 7e-4
+        with tempfile.NamedTemporaryFile('w', suffix='.csv',
+                                         delete=False) as f:
+            f.write(self.TEXT + '\n')
+        out = tempfile.mktemp(suffix='.csv')
+        try:
+            rep = RecordingReporter()
+            config_csv.build_from_template(src, f.name, out, rep)
+            got = {(r.index, r.subindex): r.data for r in config_csv.read(out)
+                   if r.kind == 'entry'}
+            self.assertEqual(got[('0x2381', '3')], '12.5')
+            self.assertAlmostEqual(float(got[('0x2381', '4')]), 7e-4, places=7)
+            self.assertTrue(any('0x2381,3' in t for t in rep.texts('note')))
+        finally:
+            for path in (f.name, out):
+                if os.path.exists(path):
+                    os.unlink(path)
 
 
 class TestKt(unittest.TestCase):

@@ -108,17 +108,27 @@ ENC_FILTER = (0x3013, 6)
 ENC_CHIP = (0x3013, 12)
 ENC_CHIPS = {1: 'MA736', 2: 'MA735'}
 
-#: Board calibration: the current-sense calibration, electrical zero and
-#: winding polarity, and the encoder runout table.  A CSV configures the
-#: communication and the motor, never these: they belong to one board and are
-#: measured on it (p4sysid commissioning), so the templates carry none and
-#: export writes none.  apply() skips any an older CSV still has -- loaded
-#: onto another puck they would replace its calibration with someone else's,
-#: or from a blank template zero its Gainfactor, which reads every current
-#: as 0.
+#: Board calibration -- the per-actuator calibration (p4sysid.plans.ACTUATOR):
+#: the current-sense bias, gain, slope and drive-on offset, electrical zero
+#: and winding polarity, the encoder runout table and the cogging
+#: feed-forward.  A CSV configures the communication and the motor (one CSV
+#: for a manufacturing batch), never these: they belong to one actuator and
+#: are measured on it, so the templates carry none and export writes none.
+#: apply() skips any an older CSV still has -- loaded onto another puck they
+#: would replace its calibration with someone else's, or from a blank
+#: template zero its Gainfactor, which reads every current as 0.
 BOARD_CALIBRATION = frozenset(
     [(0x3008, s) for s in (3, 6, 7, 8)] + [(0x3009, s) for s in (3, 6, 7, 8)] +
-    [(0x3011, 1), (0x3011, 2)] + [(0x3027, s) for s in range(1, 10)])
+    [(0x3011, 1), (0x3011, 2)] + [(0x3027, s) for s in range(1, 10)] +
+    [(0x302E, s) for s in range(1, 16)])
+
+#: Rows a template carries that older firmware does not have: the Coulomb
+#: friction feed-forward and the settle ki (stm32 e1b0a4e / cfaea4d).  Loaded
+#: onto such firmware, the drive's "no such object" is a note, not an error;
+#: exported from it, the template's value (0, off) is kept.
+OPTIONAL_ROWS = frozenset([(0x2381, 3), (0x2381, 4)])
+#: SDO aborts that mean the object or sub-index does not exist.
+NO_OBJECT_ABORTS = frozenset([0x06020000, 0x06090011])
 
 
 #: Torque per-mille changed base with stm32 ecdc33c: from a writable 0x6076
@@ -546,6 +556,10 @@ def apply(node, rows, node_id=None, reporter=None):
                             continue
                         except (SdoAbortedError, SdoCommunicationError):
                             pass
+                    if (index, sub) in OPTIONAL_ROWS and exc.code in NO_OBJECT_ABORTS:
+                        reporter.note('{}: this firmware has no 0x{:04X},{} ({}): '
+                                      'skipped'.format(where, index, sub, row.comment))
+                        continue
                     if (index, sub) == ENC_FILTER and exc.code == 0x06090030:
                         try:
                             chip = ENC_CHIPS.get(node.sdo.upload(*ENC_CHIP)[0])
@@ -662,12 +676,20 @@ def build_from_template(node, template, output, reporter=None, date=None):
             try:
                 raw = node.sdo.upload(index, sub)
                 value = decode(row.datatype, raw)
-            except SdoAbortedError:
-                if (index, sub) != KT:
+            except SdoAbortedError as exc:
+                if (index, sub) in OPTIONAL_ROWS and exc.code in NO_OBJECT_ABORTS:
+                    value = None
+                elif (index, sub) != KT:
                     raise
-                value = float(int.from_bytes(node.sdo.upload(*KT_U16)[:2], 'little'))
-            fields[5] = _format(row.index, row.datatype, value)
-            count += 1
+                else:
+                    value = float(int.from_bytes(node.sdo.upload(*KT_U16)[:2],
+                                                 'little'))
+            if value is None:
+                reporter.note('0x{:04X},{} is not in this firmware: the '
+                              'template\'s {} kept'.format(index, sub, fields[5]))
+            else:
+                fields[5] = _format(row.index, row.datatype, value)
+                count += 1
             reporter.progress(100 * count // max(entries, 1))
         buf = []
         csv.writer(_Collect(buf), lineterminator='').writerow(fields)
