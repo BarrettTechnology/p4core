@@ -100,6 +100,14 @@ POLARITY = (0x607E, 0)
 KT = (0x3011, 14)
 KT_U16 = (0x3011, 4)
 
+#: The encoder's hardware filter.  From stm32 f226b61 the STM32 identifies its
+#: sensor at boot (0x3013,12: 1 MA736, 2 MA735) and refuses the other chip's
+#: values -- a P4-42 CSV written for an MA736 (0x90, 0xA0) on a P4-42 with an
+#: MA735.  That is a note, not an error: the sensor keeps its own setting.
+ENC_FILTER = (0x3013, 6)
+ENC_CHIP = (0x3013, 12)
+ENC_CHIPS = {1: 'MA736', 2: 'MA735'}
+
 #: Board calibration: the current-sense calibration, electrical zero and
 #: winding polarity, and the encoder runout table.  A CSV configures the
 #: communication and the motor, never these: they belong to one board and are
@@ -459,6 +467,16 @@ def apply(node, rows, node_id=None, reporter=None):
                             continue
                         except (SdoAbortedError, SdoCommunicationError):
                             pass
+                    if (index, sub) == ENC_FILTER and exc.code == 0x06090030:
+                        try:
+                            chip = ENC_CHIPS.get(node.sdo.upload(*ENC_CHIP)[0])
+                        except (SdoAbortedError, SdoCommunicationError):
+                            chip = None
+                        if chip:
+                            reporter.note('{}: encoder filter {} is not an {} value: '
+                                          'refused, the sensor keeps its own setting '
+                                          '(0x3013,6)'.format(where, value, chip))
+                            continue
                     result.errors.append(
                         '{}: SDO abort 0x{:08X} on 0x{:04X},{} ({})'.format(
                             where, exc.code, index, sub, row.comment))

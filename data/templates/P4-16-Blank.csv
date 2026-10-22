@@ -145,7 +145,7 @@ Position tracking fault timeout (ms),,0x2121,0,UNSIGNED16,500
 # Velocity control
 Kp,,0x2381,1,REAL32,0
 Ki,,0x2381,2,REAL32,0
-Encoder velocity low-pass filter (Hz),,0x2100,1,UNSIGNED16,50
+Encoder velocity low-pass filter (Hz),,0x2100,1,UNSIGNED16,0 # off: the encoder hardware filter (0x3013 sub 6) smooths it
 Velocity controller input low-pass filter (Hz),,0x2100,2,UNSIGNED16,0
 Velocity controller output low-pass filter (Hz),,0x2100,3,UNSIGNED16,0
 Velocity tracking warning window (cts/sec) - 10%,,0x606D,0,UNSIGNED16,0

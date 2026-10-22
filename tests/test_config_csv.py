@@ -98,6 +98,31 @@ class TestApply(unittest.TestCase):
             self.assertEqual(node.values[(0x607E, 0)], want)
             self.assertTrue(any('0x607E' in t for t in rep.texts('note')))
 
+    def test_other_chips_encoder_filter_is_a_note(self):
+        """A P4-42 CSV's MA736 filter on an MA735 board: refused, noted."""
+        from canopen.sdo.exceptions import SdoAbortedError
+        node = FakeNode(5, {(0x3013, 12): 2})
+
+        def refuse(value):
+            raise SdoAbortedError(0x06090030)
+        node.write_hooks[(0x3013, 6)] = refuse
+        rep = RecordingReporter()
+        result = config_csv.apply(node, rows(
+            'Encoder H/W filter,,0x3013,6,UNSIGNED8,0xA0'), reporter=rep)
+        self.assertTrue(result.ok, result.errors)
+        self.assertTrue(any('MA735' in t for t in rep.texts('note')))
+
+    def test_encoder_filter_abort_without_a_chip_stays_an_error(self):
+        from canopen.sdo.exceptions import SdoAbortedError
+        node = FakeNode(5)
+
+        def refuse(value):
+            raise SdoAbortedError(0x06090030)
+        node.write_hooks[(0x3013, 6)] = refuse
+        result = config_csv.apply(node, rows(
+            'Encoder H/W filter,,0x3013,6,UNSIGNED8,0xA0'))
+        self.assertEqual(len(result.errors), 1)
+
     def test_legacy_polarity_row_on_legacy_firmware(self):
         node = FakeNode(5)
         result = config_csv.apply(node, rows(
