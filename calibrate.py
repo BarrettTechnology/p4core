@@ -582,7 +582,7 @@ def has_rated_units(node):
     try:
         node.sdo.upload(*RATED_CURRENT)
         return True
-    except SdoAbortedError:
+    except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
         return False
 
 
@@ -591,7 +591,7 @@ def working_peak_ma(node):
     firmware without it."""
     try:
         return _u(node, *WORKING_PEAK, 2)
-    except SdoAbortedError:
+    except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
         return _u(node, *I_PEAK, 2)
 
 
@@ -600,7 +600,7 @@ def permille_base_ma(node):
     rated current 0x6075, or i_peak on older firmware.  0 = no scale."""
     try:
         return _u(node, *RATED_CURRENT, 4)
-    except SdoAbortedError:
+    except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
         return _u(node, *I_PEAK, 2)
 
 
@@ -610,7 +610,10 @@ def rated_torque_mnm(node):
     publishes it in whole mNm); older firmware's writable 0x6076 as is."""
     if has_rated_units(node):
         return read_kt(node) * _u(node, *RATED_CURRENT, 4) * 1e-3 / SQRT2
-    return float(_u(node, *RATED_TORQUE, 4))
+    try:
+        return float(node.sdo['RatedTorque'].raw)
+    except KeyError:    # a node without the EDS names
+        return float(_u(node, *RATED_TORQUE, 4))
 
 
 #: The user polarity: 0x607E (DS402) holds 0x00, or 0xC0 to invert position
