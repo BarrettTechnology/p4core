@@ -539,5 +539,29 @@ class TestKt(unittest.TestCase):
             calibrate.write_kt(node, -1)
 
 
+
+class TestFriction(unittest.TestCase):
+    """The drag fit's Tc and B, 0x3011,17/18 (stm32 898910f)."""
+
+    def test_round_trip(self):
+        from p4core import calibrate
+        node = FakeNode(5)
+        node.values[(0x3011, 17)] = 0.0
+        node.values[(0x3011, 18)] = 0.0
+        self.assertEqual(calibrate.read_friction(node), (0.0, 0.0))
+        self.assertTrue(calibrate.write_friction(node, 12.5, 0.031))
+        tc, b = calibrate.read_friction(node)
+        self.assertAlmostEqual(tc, 12.5, places=5)
+        self.assertAlmostEqual(b, 0.031, places=6)
+        with self.assertRaises(ValueError):
+            calibrate.write_friction(node, -1.0)
+
+    def test_old_firmware(self):
+        from p4core import calibrate
+        node = FakeNode(5)
+        node.readonly.update({(0x3011, 17), (0x3011, 18)})
+        self.assertIsNone(calibrate.read_friction(node))
+        self.assertFalse(calibrate.write_friction(node, 12.5))
+
 if __name__ == '__main__':
     unittest.main()

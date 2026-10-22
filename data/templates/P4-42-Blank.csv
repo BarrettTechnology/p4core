@@ -104,6 +104,8 @@ Peak current duration (ms),,0x3011,10,UNSIGNED16,100
 Motor calibration current (mA),,0x3011,11,UNSIGNED16,500
 Motor Lq (uH),,0x3011,12,UNSIGNED16,0
 Motor L_hf (uH) (0 = off; isense ripple correction),,0x3011,13,UNSIGNED16,0
+Coulomb friction Tc (mNm),,0x3011,17,REAL32,0 # drag fit; 0 = not measured (p4sysid drag; friction_ff uses it)
+Viscous friction B (mNm.s/rad),,0x3011,18,REAL32,0 # drag fit; 0 = not measured
 Gear ratio motor revolution,,0x6091,1,UNSIGNED32,1
 Gear ratio shaft revolution,,0x6091,2,UNSIGNED32,1
 Motor Speed / Torque Gradient (0.001 RPM/mNm),,0x3024,1,UNSIGNED16,0

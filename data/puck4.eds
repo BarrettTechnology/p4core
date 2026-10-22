@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=12:52PM
+CreationTime=04:45PM
 CreationDate=10-22-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=12:52PM
+ModificationTime=04:45PM
 ModificationDate=10-22-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -2902,14 +2902,14 @@ DefaultValue=0
 [3011]
 ParameterName=Calibration
 ObjectType=0x09
-SubNumber=17
+SubNumber=19
 
 [3011sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=16
+DefaultValue=18
 
 [3011sub1]
 ParameterName=e_zero
@@ -3021,6 +3021,20 @@ ParameterName=WorkingPeakLayers
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
+DefaultValue=0
+
+[3011sub11]
+ParameterName=CoulombFrictionTc
+ObjectType=0x07
+DataType=0x0008
+AccessType=rw
+DefaultValue=0
+
+[3011sub12]
+ParameterName=ViscousFrictionB
+ObjectType=0x07
+DataType=0x0008
+AccessType=rw
 DefaultValue=0
 
 [3012]

@@ -557,6 +557,42 @@ def write_kt(node, mnm, save=False):
     return where
 
 
+#: The drag fit's friction (stm32 898910f): 0x3011,17 Tc in mNm and 0x3011,18
+#: B in mNm.s/rad, both float.  The firmware only stores them, beside J
+#: (0x3011,7), so a step that needs Tc (the Coulomb feed-forward) can run in
+#: a later session than the drag.  0 = not measured.
+FRICTION_TC = (0x3011, 17)
+FRICTION_B = (0x3011, 18)
+
+
+def read_friction(node):
+    """(Tc mNm, B mNm.s/rad) from the drive, or None on firmware without
+    them.  0 means not measured."""
+    try:
+        tc = struct.unpack('<f', bytes(node.sdo.upload(*FRICTION_TC))[:4])[0]
+        b = struct.unpack('<f', bytes(node.sdo.upload(*FRICTION_B))[:4])[0]
+    except SdoAbortedError:
+        return None
+    return (0.0 if math.isnan(tc) else tc, 0.0 if math.isnan(b) else b)
+
+
+def write_friction(node, tc_mnm, b_mnm_s=0.0, save=False):
+    """Store the drag's Tc (mNm) and B (mNm.s/rad), saved when *save*.
+    Returns False on firmware without the objects (nothing written)."""
+    tc_mnm, b_mnm_s = float(tc_mnm), float(b_mnm_s)
+    for name, v in (('Tc', tc_mnm), ('B', b_mnm_s)):
+        if not (0.0 <= v < 1e6):
+            raise ValueError('{} {} is out of range'.format(name, v))
+    try:
+        node.sdo.download(*FRICTION_TC, struct.pack('<f', tc_mnm))
+    except SdoAbortedError:
+        return False
+    node.sdo.download(*FRICTION_B, struct.pack('<f', b_mnm_s))
+    if save:
+        save_single(node, *FRICTION_TC)
+        save_single(node, *FRICTION_B)
+    return True
+
 #: CiA 402 units (stm32 ecdc33c, "DS402 stage 2"): every torque and current
 #: per-mille (0x6071-0x6074, 0x6077, 0x6078, 0x3010,6, 0x60B2, 0x60E0/1,
 #: 0x6087, the velocity and impedance gains) is of the RATED current 0x6075
