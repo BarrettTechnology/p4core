@@ -669,9 +669,18 @@ TORQUE_UNIT_ROWS = (((0x2381, 1), 'f'), ((0x2381, 2), 'f'), ((0x2381, 3), 'f'),
                     ((0x6087, 0), 'I'))
 
 
-def rescale_torque_units(node, factor):
+#: The DS402 session limits, per-mille of the rated torque (0x6072, 0x60E0,
+#: 0x60E1) or rated current (0x6073): U16, RAM only, 65535 (the power-on
+#: value) = no limit.  A limit the host set means a torque, so it rescales
+#: with the gains; an unset one stays unset.
+TORQUE_LIMIT_ROWS = ((0x6072, 0), (0x6073, 0), (0x60E0, 0), (0x60E1, 0))
+LIMIT_UNSET = 0xFFFF
+
+
+def rescale_torque_units(node, factor, limits=True):
     """Multiply every TORQUE_UNIT_ROWS value on the drive (RAM) by *factor*;
-    0 and NaN (unset) stay.  Returns the rows changed."""
+    0 and NaN (unset) stay.  With *limits*, TORQUE_LIMIT_ROWS too (an unset
+    65535 stays, a set one is held under it).  Returns the rows changed."""
     changed = []
     for (idx, sub), fmt in TORQUE_UNIT_ROWS:
         try:
@@ -683,6 +692,17 @@ def rescale_torque_units(node, factor):
         v = v * factor if fmt == 'f' else min(0xFFFFFFFF, int(round(v * factor)))
         node.sdo.download(idx, sub, struct.pack('<' + fmt, v))
         changed.append((idx, sub))
+    for idx, sub in (TORQUE_LIMIT_ROWS if limits else ()):
+        try:
+            v = struct.unpack('<H', bytes(node.sdo.upload(idx, sub))[:2])[0]
+        except (SdoAbortedError, KeyError, struct.error):
+            continue
+        if v == LIMIT_UNSET:
+            continue
+        w = max(0, min(LIMIT_UNSET - 1, int(round(v * factor))))
+        if w != v:
+            node.sdo.download(idx, sub, struct.pack('<H', w))
+            changed.append((idx, sub))
     return changed
 
 
@@ -692,7 +712,7 @@ def write_i_cont(node, i_cont_ma):
     On rated-unit firmware the rated torque is Kt x i_cont / sqrt2, so a new
     i_cont changes what every torque per-mille means: TORQUE_UNIT_ROWS are
     scaled by old / new rated so the loops' torque per unit error stays as
-    tuned.  The drive re-derives 0x6075/0x6076 in IDLE.  Returns that factor
+    tuned, and a set TORQUE_LIMIT_ROWS limit so it stays the same torque.  The drive re-derives 0x6075/0x6076 in IDLE.  Returns that factor
     (1.0 on older firmware, where 0x6076 is the base and i_cont is not)."""
     i_cont_ma = int(round(i_cont_ma))
     rated = has_rated_units(node)

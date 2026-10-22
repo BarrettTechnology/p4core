@@ -48,6 +48,22 @@ class TestWriteICont(unittest.TestCase):
         self.assertEqual(calibrate.write_i_cont(n, 5327), 1.0)
         self.assertEqual(n.values[(0x2381, 1)], 0.0035)
 
+    def test_set_limits_keep_their_torque_unset_stay(self):
+        n = node()
+        n.values.update({(0x6072, 0): 3000, (0x6073, 0): 0xFFFF,
+                         (0x60E0, 0): 50000, (0x60E1, 0): 0xFFFF})
+        calibrate.write_i_cont(n, 4000)
+        self.assertEqual(n.values[(0x6072, 0)], round(3000 * 5327 / 4000))
+        self.assertEqual(n.values[(0x6073, 0)], 0xFFFF)
+        self.assertEqual(n.values[(0x60E0, 0)], 0xFFFE)   # held under unset
+        self.assertEqual(n.values[(0x60E1, 0)], 0xFFFF)
+
+    def test_limits_left_out_on_request(self):
+        n = node()
+        n.values[(0x6072, 0)] = 3000
+        calibrate.rescale_torque_units(n, 0.5, limits=False)
+        self.assertEqual(n.values[(0x6072, 0)], 3000)
+
 
 if __name__ == '__main__':
     unittest.main()
