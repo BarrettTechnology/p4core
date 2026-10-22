@@ -509,8 +509,10 @@ def apply(node, rows, node_id=None, reporter=None):
                 pass
             else:
                 index, sub = int(row.index, 0), int(row.subindex, 0)
-                if rated_fw and (index, sub) == RATED_TORQUE:
-                    continue    # derived on this firmware (torque_unit_factor)
+                if rated_fw and (index, sub) in (RATED_TORQUE, RATED_CURRENT):
+                    # derived on this firmware (torque_unit_factor); writable since
+                    # stage 3, but as aliases of Kt and i_cont, which the CSV sets
+                    continue
                 if factor is not None and (index, sub) in TORQUE_UNIT_ROWS:
                     data, value = _scaled(row, factor, node_id)
                 try:

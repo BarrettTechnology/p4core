@@ -28,8 +28,7 @@ from .flash import read_version
 from .reporter import Reporter
 
 
-MODE_IDLE = 0
-MODE_PHASE_VOLTAGE_ANGLE = 12
+from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, drive_mode
 
 GAIN_FIT_STEPS = 48         # one electrical revolution
 #: Per-step dwell at full size; a caller that raised i_cal to the current
@@ -318,7 +317,7 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
         _enable(sdo)
         sdo['Theta_e'].raw = 0x7FFF         # stall at the alpha peak (+pi)
         sdo['Motor']['ud'].raw = 0
-        sdo['SetModeOfOperation'].raw = MODE_PHASE_VOLTAGE_ANGLE
+        sdo['SetModeOfOperation'].raw = drive_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         # uq after the mode switch: in profile torque the PI overwrites it
         # every ISR; in phase-voltage-angle mode the write sticks.
         sdo['Motor']['uq'].raw = 0
@@ -404,7 +403,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     samples, ids = [], []
     try:
         _enable(sdo)
-        sdo['SetModeOfOperation'].raw = MODE_PHASE_VOLTAGE_ANGLE
+        sdo['SetModeOfOperation'].raw = drive_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         sdo['Motor']['uq'].raw = 0
         sdo['Theta_e'].raw = 0
         reporter.sleep(settle_s)
@@ -566,6 +565,11 @@ def write_kt(node, mnm, save=False):
 #: is of i_peak (0x3011,9) and its torque per-mille of a writable 0x6076 the
 #: host chose.  0x3011,15 is the working peak (min of i_peak, amp.i_max and
 #: the sense; stage 1), absent before it.
+#:
+#: Stage 3 (stm32 cf8d11e): 0x6075 is mA r.m.s. (i_cont / sqrt2) and both are
+#: writable (0x6075 sets i_cont, 0x6076 sets Kt).  The per-mille base is still
+#: i_cont, the amplitude, so the hosts take it from 0x3011,8, which is right
+#: for both stages (ecdc33c published i_cont itself in 0x6075).
 RATED_CURRENT = (0x6075, 0)
 RATED_TORQUE = (0x6076, 0)
 WORKING_PEAK = (0x3011, 15)
@@ -597,22 +601,23 @@ def working_peak_ma(node):
 
 
 def permille_base_ma(node):
-    """What a current per-mille (0x6078, 0x3010,6, 0x6073) is of, in mA: the
-    rated current 0x6075, or i_peak on older firmware.  0 = no scale."""
-    try:
-        return _u(node, *RATED_CURRENT, 4)
-    except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
-        return _u(node, *I_PEAK, 2)
+    """What a current per-mille (0x6078, 0x3010,6, 0x6073) is of, in mA
+    (amplitude): i_cont on rated-unit firmware (0x6075 is it r.m.s.), or
+    i_peak on older firmware.  0 = no scale."""
+    if has_rated_units(node):
+        return _u(node, *I_CONT, 2)
+    return _u(node, *I_PEAK, 2)
 
 
 def id_scale(node):
     """(base mA, saturation per-mille) of the exported d-axis current
-    Motor/id (0x3010,6).  Rated-unit firmware: per-mille of 0x6075, pinned at
-    the working peak's per-mille (3000 for a P4-42 at i_cont 9428); older
+    Motor/id (0x3010,6).  Rated-unit firmware: per-mille of i_cont, pinned
+    at the working peak's per-mille (3000 for a P4-42 at i_cont 9428); older
     firmware: per-mille of i_peak, pinned at 1000.  Probes that a test fake
     cannot answer (no upload, no row) read as older firmware."""
     try:
-        rated = _u(node, *RATED_CURRENT, 4)
+        node.sdo.upload(*RATED_CURRENT)
+        rated = _u(node, *I_CONT, 2)
     except (SdoAbortedError, KeyError, AttributeError):
         rated = 0
     if not rated:
@@ -626,15 +631,35 @@ def id_scale(node):
 
 def rated_torque_mnm(node):
     """What a torque per-mille is of, in mNm.  On rated-unit firmware this is
-    computed as the firmware does (Kt x 0x6075 / sqrt2, unrounded: 0x6076
+    computed as the firmware does (Kt x i_cont / sqrt2, unrounded: 0x6076
     publishes it in whole mNm); older firmware's writable 0x6076 as is."""
     if has_rated_units(node):
-        return read_kt(node) * _u(node, *RATED_CURRENT, 4) * 1e-3 / SQRT2
+        return read_kt(node) * _u(node, *I_CONT, 2) * 1e-3 / SQRT2
     try:
         return float(node.sdo['RatedTorque'].raw)
     except KeyError:    # a node without the EDS names
         return float(_u(node, *RATED_TORQUE, 4))
 
+
+
+#: CiA 402 DC link voltage (stage 3), mV; older firmware has only 0x3000,1 in
+#: 0.1 V.
+DC_LINK_MV = (0x6079, 0)
+BUS_DV = (0x3000, 1)
+
+
+def read_bus_mv(node):
+    """The measured bus voltage in mV: 0x6079, or 0x3000,1 x 100 on firmware
+    without it."""
+    try:
+        return _u(node, *DC_LINK_MV, 4)
+    except (SdoAbortedError, KeyError):   # KeyError: absent from a test fake
+        return _u(node, *BUS_DV, 2) * 100
+
+
+def read_bus_v(node):
+    """read_bus_mv() in volts."""
+    return read_bus_mv(node) * 1e-3
 
 
 #: The rows whose values are per-mille of the rated torque (velocity PI, Tc

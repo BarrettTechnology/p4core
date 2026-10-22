@@ -106,12 +106,14 @@ class FakeNode:
 
 class RatedFakeNode(FakeNode):
     """Firmware from stm32 ecdc33c: Motor/id is per-mille of the rated current
-    0x6075 and pins at the working peak's per-mille (0x3011,15), not 1000."""
+    i_cont and pins at the working peak's per-mille (0x3011,15), not 1000.
+    Stage 3 (cf8d11e) publishes 0x6075 r.m.s.; the base is still i_cont."""
 
     RATED_MA = 9428
 
     def upload(self, index, sub):
-        rows = {(0x6075, 0): self.RATED_MA, (0x3011, 15): int(self.I_PEAK_MA)}
+        rows = {(0x6075, 0): int(round(self.RATED_MA / 2 ** 0.5)),
+                (0x3011, 8): self.RATED_MA, (0x3011, 15): int(self.I_PEAK_MA)}
         if (index, sub) not in rows:
             raise KeyError((index, sub))
         return rows[(index, sub)].to_bytes(4, 'little')

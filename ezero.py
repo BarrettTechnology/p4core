@@ -28,8 +28,7 @@ revolution. The rotor turns one full revolution each way.
 import math
 import time
 
-MODE_IDLE = 0
-MODE_PHASE_VOLTAGE_ANGLE = 12
+from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, drive_mode
 F16_CYCLE = 65536          # Theta_e units per electrical cycle
 
 
@@ -134,7 +133,7 @@ def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sle
         sdo['ControlWord'].raw = 0x80
         sdo['ControlWord'].raw = 0x06
         sdo['ControlWord'].raw = 0x0F
-        sdo['SetModeOfOperation'].raw = MODE_PHASE_VOLTAGE_ANGLE
+        sdo['SetModeOfOperation'].raw = drive_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         sdo['Motor']['uq'].raw = 0      # uq == 0 keeps the firmware on the host's angle
         theta = 0
         sdo['Theta_e'].raw = theta

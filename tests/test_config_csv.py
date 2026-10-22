@@ -403,7 +403,7 @@ class TestReal32(unittest.TestCase):
                  'Slope,,0x6087,0,UNSIGNED32,20000')
 
     def _rated_node(self):
-        node = FakeNode(8, {(0x6075, 0): 5327})
+        node = FakeNode(8, {(0x6075, 0): 3767, (0x3011, 8): 5327})
         node.readonly.update([(0x6075, 0), (0x6076, 0)])
         return node
 

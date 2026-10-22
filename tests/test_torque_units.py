@@ -17,7 +17,7 @@ def node(rated_fw=True, i_cont=5327):
     n = FakeNode(8, dict(GAINS))
     n.values[(0x3011, 8)] = i_cont
     if rated_fw:
-        n.values[(0x6075, 0)] = i_cont
+        n.values[(0x6075, 0)] = int(round(i_cont / 2 ** 0.5))   # r.m.s. (stage 3)
     return n
 
 

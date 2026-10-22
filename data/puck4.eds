@@ -4,10 +4,10 @@ FileVersion=4
 FileRevision=5
 EDSVersion=4.0
 Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=11:12AM
+CreationTime=12:52PM
 CreationDate=10-22-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=11:12AM
+ModificationTime=12:52PM
 ModificationDate=10-22-2026
 ModifiedBy=scripts/gen_eds.py
 
@@ -54,7 +54,7 @@ SupportedObjects=3
 3=0x1018
 
 [OptionalObjects]
-SupportedObjects=82
+SupportedObjects=84
 1=0x1002
 2=0x1003
 3=0x1005
@@ -112,31 +112,33 @@ SupportedObjects=82
 55=0x6076
 56=0x6077
 57=0x6078
-58=0x607A
-59=0x607C
-60=0x607D
-61=0x607E
-62=0x6080
-63=0x6081
-64=0x6082
-65=0x6083
-66=0x6084
-67=0x6085
-68=0x6087
-69=0x6091
-70=0x6098
-71=0x60B0
-72=0x60B1
-73=0x60B2
-74=0x60C2
-75=0x60E0
-76=0x60E1
-77=0x60EA
-78=0x60F4
-79=0x60FA
-80=0x60FC
-81=0x60FF
-82=0x6502
+58=0x6079
+59=0x607A
+60=0x607C
+61=0x607D
+62=0x607E
+63=0x6080
+64=0x6081
+65=0x6082
+66=0x6083
+67=0x6084
+68=0x6085
+69=0x6087
+70=0x6088
+71=0x6091
+72=0x6098
+73=0x60B0
+74=0x60B1
+75=0x60B2
+76=0x60C2
+77=0x60E0
+78=0x60E1
+79=0x60EA
+80=0x60F4
+81=0x60FA
+82=0x60FC
+83=0x60FF
+84=0x6502
 
 [ManufacturerObjects]
 SupportedObjects=53
@@ -4364,14 +4366,14 @@ DefaultValue=0
 [6060]
 ParameterName=SetModeOfOperation
 ObjectType=0x07
-DataType=0x0005
+DataType=0x0002
 AccessType=rw
 DefaultValue=0
 
 [6061]
 ParameterName=ReadModeOfOperation
 ObjectType=0x07
-DataType=0x0005
+DataType=0x0002
 AccessType=ro
 DefaultValue=0
 
@@ -4463,21 +4465,21 @@ DefaultValue=65535
 ParameterName=trq_command
 ObjectType=0x07
 DataType=0x0003
-AccessType=rw
+AccessType=ro
 DefaultValue=0
 
 [6075]
 ParameterName=RatedCurrent
 ObjectType=0x07
 DataType=0x0007
-AccessType=ro
+AccessType=rw
 DefaultValue=0
 
 [6076]
 ParameterName=RatedTorque
 ObjectType=0x07
 DataType=0x0007
-AccessType=ro
+AccessType=rw
 DefaultValue=0
 
 [6077]
@@ -4491,6 +4493,13 @@ DefaultValue=0
 ParameterName=CurrentFeedback
 ObjectType=0x07
 DataType=0x0003
+AccessType=ro
+DefaultValue=0
+
+[6079]
+ParameterName=DcLinkVoltage
+ObjectType=0x07
+DataType=0x0007
 AccessType=ro
 DefaultValue=0
 
@@ -4587,6 +4596,13 @@ DefaultValue=0
 ParameterName=trq_slope
 ObjectType=0x07
 DataType=0x0007
+AccessType=rw
+DefaultValue=0
+
+[6088]
+ParameterName=TorqueProfileType
+ObjectType=0x07
+DataType=0x0003
 AccessType=rw
 DefaultValue=0
 

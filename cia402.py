@@ -24,7 +24,72 @@ MODE_CYCLIC_SYNC_POS = 8
 MODE_CYCLIC_SYNC_VEL = 9
 MODE_CYCLIC_SYNC_TRQ = 10
 MODE_CYCLIC_SYNC_TRQ_ANGLE = 11
-MODE_PHASE_VOLTAGE_ANGLE = 12
+# Manufacturer-specific modes: 0x6060 is Integer8 and CiA 402 gives them -1..-128
+# (stm32 cf8d11e, "DS402 stage 3").  Older firmware numbered them 12 and 14, in the
+# range CiA 402 reserves; drive_mode() picks the numbering the drive takes.
+MODE_PHASE_VOLTAGE_ANGLE = -1
+MODE_CYCLIC_SYNC_IMP = -2
+LEGACY_MODES = {MODE_PHASE_VOLTAGE_ANGLE: 12, MODE_CYCLIC_SYNC_IMP: 14}
+
+SUPPORTED_MODES = (0x6502, 0)
+#: 0x6502 bit for manufacturer mode -k is 15 + k: -1 (phase voltage) is bit 16.
+NEGATIVE_MODES_BIT = 1 << 16
+
+
+def mode_bit(mode):
+    """The 0x6502 bit (as a mask) that advertises *mode*."""
+    return 1 << (15 - mode if mode < 0 else mode - 1)
+
+
+def supported_modes(node):
+    """0x6502 as an int, cached on the node object; 0 when it cannot be read
+    (a test fake, a flashloader)."""
+    cached = getattr(node, '_p4_supported_modes', None)
+    if cached is not None:
+        return cached
+    try:
+        v = int.from_bytes(bytes(node.sdo.upload(*SUPPORTED_MODES))[:4], 'little')
+    except Exception:   # SdoAbortedError, a fake without upload or the row
+        v = 0
+    try:
+        node._p4_supported_modes = v
+    except AttributeError:
+        pass
+    return v
+
+
+def negative_modes(node):
+    """True when the drive numbers its manufacturer modes negative (0x6502
+    bit 16), False for older firmware (12 / 14)."""
+    return bool(supported_modes(node) & NEGATIVE_MODES_BIT)
+
+
+def drive_mode(node, mode):
+    """The 0x6060 value for *mode* on this drive: the MODE_* constants are the
+    current numbering, and a manufacturer mode maps to its old number (12 /
+    14) on firmware that predates it.  Standard modes pass through."""
+    if mode in LEGACY_MODES and not negative_modes(node):
+        return LEGACY_MODES[mode]
+    return mode
+
+
+def canonical_mode(value):
+    """A 0x6060 / 0x6061 value read from any firmware, as a MODE_* constant:
+    a raw unsigned byte (255) reads as its signed value (-1), and the old 12 /
+    14 as -1 / -2."""
+    value = int(value)
+    if value > 127:
+        value -= 256
+    for new, old in LEGACY_MODES.items():
+        if value == old:
+            return new
+    return value
+
+
+def mode_byte(value):
+    """*value* (a drive_mode() result) as the one unsigned byte 0x6060 carries,
+    for raw packing ('B', bytes([...])); '<b' packs the signed value as is."""
+    return int(value) & 0xFF
 
 # Error codes (0x603F / 0x1003 / EMCY) the firmware raises, by 0x1002 bit
 # (stm32 app/faults.c codes[] and faultHandle()).
