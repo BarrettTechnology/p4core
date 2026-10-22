@@ -72,6 +72,44 @@ class TestModes(unittest.TestCase):
         self.assertEqual(cia402.mode_byte(12), 12)
 
 
+class PackedVar:
+    def __init__(self, fmt):
+        self.fmt, self.data = fmt, None
+
+    @property
+    def raw(self):
+        return struct.unpack(self.fmt, self.data)[0]
+
+    @raw.setter
+    def raw(self, v):
+        self.data = struct.pack(self.fmt, v)
+
+
+class NamedNode(Node):
+    def __init__(self, rows, fmt):
+        super().__init__(rows)
+        self.var = PackedVar(fmt)
+        self.sdo.__class__ = type('S', (Sdo,), {'__getitem__': lambda s, k: self.var})
+
+
+class TestWriteMode(unittest.TestCase):
+
+    def test_integer8_eds(self):
+        n = NamedNode(NEW, '<b')
+        self.assertEqual(cia402.write_mode(n, cia402.MODE_PHASE_VOLTAGE_ANGLE), -1)
+        self.assertEqual(n.var.data, b'\xff')
+
+    def test_old_unsigned8_eds_same_byte(self):
+        n = NamedNode(NEW, '<B')
+        cia402.write_mode(n, cia402.MODE_CYCLIC_SYNC_IMP)
+        self.assertEqual(n.var.data, b'\xfe')
+
+    def test_old_firmware(self):
+        n = NamedNode(OLD, '<B')
+        cia402.write_mode(n, cia402.MODE_PHASE_VOLTAGE_ANGLE)
+        self.assertEqual(n.var.data, b'\x0c')
+
+
 class TestBusVoltage(unittest.TestCase):
 
     def test_6079_in_mv(self):

@@ -5,6 +5,8 @@ ControlWord (0x6040) commands and ModesOfOperation (0x6060) values.  The
 drive refuses a 0x6060 write outside Operation Enabled (abort 0x08000022):
 enable first, then pick the mode.
 """
+import struct
+
 
 # ControlWord commands
 CLEAR_FAULT = 0x80   # Fault Reset (rising edge of bit 7)
@@ -90,6 +92,18 @@ def mode_byte(value):
     """*value* (a drive_mode() result) as the one unsigned byte 0x6060 carries,
     for raw packing ('B', bytes([...])); '<b' packs the signed value as is."""
     return int(value) & 0xFF
+
+
+def write_mode(node, mode):
+    """Write 0x6060 by name with drive_mode(node, mode).  An application EDS
+    from before the INTEGER8 change types it UNSIGNED8, which cannot encode
+    -1; the same byte as 255 is what the drive reads as -1."""
+    value = drive_mode(node, mode)
+    try:
+        node.sdo['SetModeOfOperation'].raw = value
+    except (struct.error, OverflowError, ValueError):
+        node.sdo['SetModeOfOperation'].raw = mode_byte(value)
+    return value
 
 # Error codes (0x603F / 0x1003 / EMCY) the firmware raises, by 0x1002 bit
 # (stm32 app/faults.c codes[] and faultHandle()).

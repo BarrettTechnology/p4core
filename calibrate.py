@@ -28,7 +28,7 @@ from .flash import read_version
 from .reporter import Reporter
 
 
-from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, drive_mode
+from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, write_mode
 
 GAIN_FIT_STEPS = 48         # one electrical revolution
 #: Per-step dwell at full size; a caller that raised i_cal to the current
@@ -317,7 +317,7 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
         _enable(sdo)
         sdo['Theta_e'].raw = 0x7FFF         # stall at the alpha peak (+pi)
         sdo['Motor']['ud'].raw = 0
-        sdo['SetModeOfOperation'].raw = drive_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
+        write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         # uq after the mode switch: in profile torque the PI overwrites it
         # every ISR; in phase-voltage-angle mode the write sticks.
         sdo['Motor']['uq'].raw = 0
@@ -403,7 +403,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     samples, ids = [], []
     try:
         _enable(sdo)
-        sdo['SetModeOfOperation'].raw = drive_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
+        write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         sdo['Motor']['uq'].raw = 0
         sdo['Theta_e'].raw = 0
         reporter.sleep(settle_s)
