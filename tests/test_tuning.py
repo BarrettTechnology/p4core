@@ -98,9 +98,11 @@ class TestVelocityLoop(unittest.TestCase):
         self.assertEqual(t.spd_trq_grad, 10)
 
     def test_position_kp(self):
-        self.assertEqual(tuning.position_kp(4), 3)
-        self.assertEqual(tuning.position_kp(1.5), 1)
-        self.assertEqual(tuning.position_kp(None), 2)
+        self.assertEqual(tuning.position_kp(4), 13)       # 2 pi 4 / 2
+        self.assertEqual(tuning.position_kp(20), 63)
+        self.assertEqual(tuning.position_kp(0.2), 1)      # floor
+        self.assertEqual(tuning.position_kp(1000), 200)   # cap
+        self.assertEqual(tuning.position_kp(None), 13)    # VEL_BW_TARGET_HZ
 
 
 def puck(over=None):
@@ -139,7 +141,7 @@ class TestDrive(unittest.TestCase):
         cur, vel, kp = tuning.design(p, **QUIET)
         self.assertEqual(cur.control_rate, 8000)
         self.assertEqual(vel.bandwidth_hz, 4.0)
-        self.assertEqual(kp, 3)
+        self.assertEqual(kp, 13)
 
     def test_apply_writes_gains_and_the_pwm(self):
         node = puck()
@@ -150,7 +152,7 @@ class TestDrive(unittest.TestCase):
         self.assertAlmostEqual(struct.unpack('<f', down[(0x2380, 1)])[0],
                                cur.kp, places=6)
         self.assertEqual(down[(0x3024, 2)], bytes([100]))
-        self.assertEqual(down[(0x2382, 1)], (3).to_bytes(2, 'little'))
+        self.assertEqual(down[(0x2382, 1)], (13).to_bytes(2, 'little'))
         self.assertEqual(down[(0x3001, 1)], (32000).to_bytes(4, 'little'))
         self.assertEqual(session.calls, ['save', 'reset'])
 

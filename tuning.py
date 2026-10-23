@@ -54,9 +54,10 @@ VEL_DT = 1.0 / 1000
 #: Below this current-loop margin the velocity target is gentled.
 ROUGH_MARGIN = 25.0
 
-#: Position Kp: velocity bandwidth / 10, clamped to [1, 3].
-POS_CASCADE_RATIO = 10.0
-POS_KP_MIN, POS_KP_MAX = 1, 3
+#: Position Kp (0x2382:1, rad/s): an octave under the velocity bandwidth,
+#: as p4sysid.loops.design_position_kp, clamped to [1, 200] (tuned 62-175).
+POS_CASCADE_RATIO = 2.0
+POS_KP_MIN, POS_KP_MAX = 1, 200
 
 CTS2RAD = math.pi * 2 / 4096
 
@@ -308,9 +309,9 @@ def velocity_gains(j, max_trq, spd_trq_grad=0.0, no_load_spd=0, nominal_spd=0,
 
 
 def position_kp(velocity_bandwidth_hz):
-    """A gentle cascade default for 0x2382:1: the velocity bandwidth over
-    POS_CASCADE_RATIO in rad/s, clamped to [1, 3] (units unverified; a
-    stiff position Kp browns out the supply on high-inertia motors)."""
+    """A cascade default for 0x2382:1, the position-loop bandwidth in rad/s:
+    the velocity bandwidth over POS_CASCADE_RATIO (an octave), clamped to
+    [POS_KP_MIN, POS_KP_MAX].  An unknown bandwidth uses VEL_BW_TARGET_HZ."""
     try:
         bw = float(velocity_bandwidth_hz)
     except (TypeError, ValueError):
@@ -318,7 +319,7 @@ def position_kp(velocity_bandwidth_hz):
     if bw > 0:
         kp = int(round(2 * math.pi * bw / POS_CASCADE_RATIO))
         return max(POS_KP_MIN, min(POS_KP_MAX, kp))
-    return 2
+    return position_kp(VEL_BW_TARGET_HZ)
 
 
 # ---------------------------------------------------------------------------
