@@ -148,11 +148,46 @@ TORQUE_UNIT_ROWS = frozenset([(0x2381, 1), (0x2381, 2), (0x2381, 3), (0x2381, 4)
                               (0x2383, 1), (0x2383, 2), (0x6087, 0)])
 
 
+#: Which firmware line a CSV was written for (p4core.firmware).  A 4.3.x CSV
+#: has the 0x3013,3 polarity row; a 4.5.0 one has rows 4.3.x lacks.
+CURRENT_LINE_ROWS = frozenset([POLARITY, (0x3011, 12), (0x3011, 13), KT,
+                               (0x3001, 12), (0x3001, 13)])
+#: A 4.3.x CSV loaded onto 4.5.0: Rt and Lt (line-to-line) change from
+#: 0.01 ohm / 0.01 mH to mOhm / uH, x10 each.
+LEGACY_X10_ROWS = frozenset([(0x3011, 5), (0x3011, 6)])
+#: ... and rows whose meaning changed with no conversion, so they are not
+#: written: 0x3013,5 was a lag factor (now a latency trim in us, whose
+#: default the old CSV's 0 would override) and 0x3024,4 a velocity gain
+#: factor in 0.01 (now the velocity bandwidth in 0.1 Hz, a tuning target).
+LEGACY_DROPPED_ROWS = {(0x3013, 5): 'the encoder lag factor (4.5.0: latency trim in us; '
+                                    'the firmware default stays)',
+                       (0x3024, 4): 'the velocity gain factor (4.5.0: velocity '
+                                    'bandwidth in 0.1 Hz; left to tuning)'}
+
+
 def _key(row):
     try:
         return int(row.index, 0), int(row.subindex, 0)
     except (TypeError, ValueError):
         return None
+
+
+def csv_line(rows):
+    """'4.5' for a CSV written for firmware 4.4.0+, '4.3' for a 4.3.x CSV,
+    None when its rows do not say."""
+    keys = {_key(r) for r in rows if r.kind == 'entry' and not r.command}
+    if keys & CURRENT_LINE_ROWS:
+        return '4.5'
+    if LEGACY_POLARITY in keys:
+        return '4.3'
+    return None
+
+
+def _legacy_x10(row, node_id):
+    value = encode(row.datatype, row.data, node_id)[1] * 10
+    width = 4 if row.datatype in ('UNSIGNED32', 'INTEGER32') else 2
+    value = int(min(max(value, 0), (1 << (8 * width)) - 1))
+    return value.to_bytes(width, 'little'), value
 
 
 def torque_unit_factor(node, rows, node_id=None):
@@ -479,6 +514,21 @@ def apply(node, rows, node_id=None, reporter=None):
                       'zero, polarity, runout) -- a CSV configures the '
                       'communication and the motor, not the board'.format(
                           len(skipped)))
+    from . import firmware
+    line = csv_line(entries)
+    drive_legacy = firmware.legacy(node)
+    if line == '4.5' and drive_legacy:
+        result.errors.append(
+            'this CSV is for firmware 4.5.0 (it has rows firmware {} lacks, and '
+            'Rt/Lt in mOhm/uH): nothing written -- load a 4.3.x CSV, or update '
+            'the firmware first'.format(firmware.detect(node).text))
+        reporter.warn(result.errors[-1])
+        return result
+    convert = line == '4.3' and not drive_legacy
+    if convert:
+        reporter.note('This CSV is for firmware 4.3.x: Rt and Lt are converted to '
+                      'mOhm/uH (x10); the encoder lag factor and velocity gain '
+                      'factor rows are not written')
     factor, why = torque_unit_factor(node, entries, node_id)
     rated_fw = why != 'older firmware: 0x6076 is written as the base'
     if factor is not None:
@@ -527,6 +577,13 @@ def apply(node, rows, node_id=None, reporter=None):
                     continue
                 if factor is not None and (index, sub) in TORQUE_UNIT_ROWS:
                     data, value = _scaled(row, factor, node_id)
+                if convert and (index, sub) in LEGACY_DROPPED_ROWS:
+                    reporter.note('{}: {} not written: {}'.format(
+                        where, row.comment or '0x{:04X},{}'.format(index, sub),
+                        LEGACY_DROPPED_ROWS[(index, sub)]))
+                    continue
+                if convert and (index, sub) in LEGACY_X10_ROWS:
+                    data, value = _legacy_x10(row, node_id)
                 try:
                     node.sdo.download(index, sub, data)
                     result.written += 1

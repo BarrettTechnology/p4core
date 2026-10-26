@@ -334,17 +334,20 @@ def _f(node, index, sub):
 
 
 def read_params(node):
-    """What the design needs, as stored on the puck (pucktuner's import)."""
+    """What the design needs, as stored on the puck (pucktuner's import).
+    On 4.3.x firmware Rt/Lt are in 0.01 ohm / 0.01 mH and 0x3024,4 is a
+    velocity gain factor, not a bandwidth (p4core.firmware)."""
+    from . import firmware
     from .calibrate import read_kt, rated_torque_mnm
     cal = node.sdo['Calibration']
-    stored_bw = _u(node, *VEL_BANDWIDTH)
+    stored_bw = 0 if firmware.legacy(node) else _u(node, *VEL_BANDWIDTH)
     try:
         vel_filter = _u(node, *VEL_FILTER)
     except Exception:
         vel_filter = 0
     return dict(
-        resistance=cal['rt'].raw / 1000,           # mOhm -> ohm, l-l
-        inductance=cal['lt'].raw / 1000000,        # uH -> H, l-l
+        resistance=firmware.rt_ohm(node, cal['rt'].raw),   # ohm, l-l
+        inductance=firmware.lt_h(node, cal['lt'].raw),     # H, l-l
         kt=read_kt(node),                          # mNm/A
         poles=cal['poles'].raw,
         max_trq=rated_torque_mnm(node),            # mNm: what a torque per-mille is of
