@@ -121,8 +121,9 @@ def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sle
     current = min(current, i_peak)
     if current <= 0 or i_peak <= 0:
         raise EZeroError('i_cal / i_peak (0x3011,11 / 9) not set: load the configuration first')
-    from .calibrate import id_scale     # calibrate imports this module
+    from .calibrate import id_scale, id_filter_settle_s   # calibrate imports this module
     base_ma, saturated = id_scale(node)
+    ramp_settle = max(0.02, id_filter_settle_s(node))   # 4.3.x's slow id filter
 
     step = F16_CYCLE // steps
     lead = steps // 2          # half an electrical cycle first each way, so friction has turned
@@ -143,7 +144,7 @@ def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sle
         while ud < 32000:
             ud = min(ud + 100, 32000)
             sdo['Motor']['ud'].raw = ud
-            sleep(0.02)
+            sleep(ramp_settle)
             i_d = sdo['Motor']['id'].raw
             if i_d >= saturated or i_d / 1000.0 * base_ma >= current:
                 break

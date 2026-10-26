@@ -159,5 +159,26 @@ class CsvLineTest(unittest.TestCase):
         self.assertIn((0x3013, 5), written)
 
 
+class TestIdFilterSettle(unittest.TestCase):
+    """4.3.x's exported id filter is 10x slow (Rt in 0.01 ohm read as mOhm):
+    the calibration ramps wait for it."""
+
+    def test_legacy_p4_42_waits_about_a_tenth_of_a_second(self):
+        from p4core import calibrate
+        node = legacy_node(values={(0x3011, 5): struct.pack('<H', 28),
+                                   (0x3011, 6): struct.pack('<H', 17)})
+        self.assertAlmostEqual(calibrate.id_filter_settle_s(node), 0.107, places=3)
+
+    def test_current_line_does_not_wait(self):
+        from p4core import calibrate
+        node = current_node(values={(0x3011, 5): struct.pack('<H', 280),
+                                    (0x3011, 6): struct.pack('<H', 170)})
+        self.assertEqual(calibrate.id_filter_settle_s(node), 0.0)
+
+    def test_legacy_without_rt_does_not_wait(self):
+        from p4core import calibrate
+        self.assertEqual(calibrate.id_filter_settle_s(legacy_node()), 0.0)
+
+
 if __name__ == '__main__':
     unittest.main()

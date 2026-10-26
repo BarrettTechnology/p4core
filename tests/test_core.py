@@ -295,6 +295,9 @@ class TestCalibrateMenuSettings(unittest.TestCase):
         steps = [b - a for a, b in zip([0] + uds, uds)]
         self.assertTrue(all(s <= max(calibrate.NEWTON_FIRST_STEP,
                                      calibrate.NEWTON_STEP_MAX) for s in steps))
+        # It starts small: a big first step overshot a low-R winding 10x.
+        self.assertEqual(uds[0], calibrate.NEWTON_FIRST_STEP)
+        self.assertLess(ud, 1300)
 
     def test_gain_out_of_bounds_declined_restores(self):
         puck = SimPuck()

@@ -55,10 +55,19 @@ RAMP_SETTLE_S = 0.05
 #: firmware before stm32 ecdc33c (later: id_scale()'s peak per-mille).
 RAMP_ID_SATURATED = 1000
 #: The proportional ramp (newton=True): per-step ud bounds, first step, settle.
+#: Until a current reads, ud doubles from the first step: a fixed big first
+#: step (RAMP_UD_MAX / 12 = 2666) put 9.7 A into a P4-42 at 24 V for a 1 A
+#: i_cal (4.3.3: 1 A is ud ~850, the dead time makes the curve steep).
 NEWTON_STEP_MIN = 100
 NEWTON_STEP_MAX = 2000
-NEWTON_FIRST_STEP = RAMP_UD_MAX // 12
+NEWTON_FIRST_STEP = NEWTON_STEP_MIN
 NEWTON_SETTLE_S = 0.05
+#: 4.3.x low-passes the exported id at fc = 1.7 / (2 pi 5 tau) with tau taken
+#: as Lt[0.01 mH] * 0.01 / Rt[mOhm] (stm32 cdcff19 pwm_init); 4.3.x stores Rt
+#: in 0.01 ohm, so tau reads 10x long (a P4-42: 9 Hz, not 90).  The ramp then
+#: waits ID_FILTER_SETTLE_TAUS of the biquad's 1/(2 pi fc) per step, or a lagging
+#: id walks ud far past i_cal (a P4-42 at 24 V reached 6-10 A for 1 A).
+ID_FILTER_SETTLE_TAUS = 6.0
 
 #: puckutility's calibrate menu settings for the steps.  Bias: a shorter
 #: fixed settle, then a 100-sample average for sub-count precision, in the
@@ -203,6 +212,24 @@ def calibration_current(node):
     return min(sdo['Calibration']['i_cal'].raw, sdo['Calibration']['i_peak'].raw)
 
 
+def id_filter_settle_s(node):
+    """How long the exported id (0x3010,6) takes to follow a step: 0 on
+    4.4.0+, ID_FILTER_SETTLE_TAUS filter time constants on 4.3.x (see there)."""
+    from . import firmware
+    try:
+        if not firmware.legacy(node):
+            return 0.0
+        rt = _u(node, 0x3011, 5, 2)
+        lt = _u(node, 0x3011, 6, 2)
+    except Exception:                     # noqa: BLE001 -- no answer: no wait
+        return 0.0
+    if not rt or not lt:
+        return 0.0
+    tau_winding = lt * 0.01 / rt          # as 4.3.x computes it (s)
+    fc = 1.7 / (2.0 * math.pi * 5.0 * tau_winding)
+    return ID_FILTER_SETTLE_TAUS / (2.0 * math.pi * fc)
+
+
 def ramp_to_calibration_current(node, reporter=None, newton=False,
                                  progress=None):
     """Raise ud until the d-axis current reaches i_cal.  Returns that ud.
@@ -211,7 +238,8 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
     sees the previous step's current still decaying, exits at ud = 0 and
     calibrates against a rotor that never moved.
 
-    *newton* (puckutility's ramp) sizes each step from the current so far,
+    *newton* (puckutility's ramp) doubles ud until a current reads, then
+    sizes each step from the current so far,
     a quarter of the way to the ud that would give i_cal, between
     NEWTON_STEP_MIN and NEWTON_STEP_MAX.  The cap matters: a falsely low
     reading used to slam ud to the ceiling in one jump, which drives a small
@@ -223,6 +251,8 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
     sdo = node.sdo
     target = calibration_current(node)
     base_ma, saturated = id_scale(node)
+    settle_s = max(NEWTON_SETTLE_S if newton else RAMP_SETTLE_S,
+                   id_filter_settle_s(node))
     ud = 0
     i_ma = 0.0
     while ud < RAMP_UD_MAX:
@@ -232,10 +262,10 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
             step = max(NEWTON_STEP_MIN, min(NEWTON_STEP_MAX,
                        int((ud * target / i_ma - ud) / 4)))
         else:
-            step = NEWTON_FIRST_STEP
+            step = NEWTON_FIRST_STEP if ud == 0 else min(NEWTON_STEP_MAX, ud)
         ud = min(ud + step, RAMP_UD_MAX)
         sdo['Motor']['ud'].raw = ud
-        reporter.sleep(NEWTON_SETTLE_S if newton else RAMP_SETTLE_S)
+        reporter.sleep(settle_s)
         i_d = sdo['Motor']['id'].raw
         i_ma = i_d / 1000.0 * base_ma
         if progress and target > 0:
