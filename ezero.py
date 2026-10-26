@@ -28,7 +28,7 @@ revolution. The rotor turns one full revolution each way.
 import math
 import time
 
-from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, write_mode
+from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, describe_error, write_mode
 F16_CYCLE = 65536          # Theta_e units per electrical cycle
 
 
@@ -103,6 +103,28 @@ def solve(samples, res, pole_pairs):
     )
 
 
+def _raise_if_faulted(node, leg):
+    """EZeroError when the drive went to FAULT during the *leg* sweep: the
+    field dropped (a P4-37 at 3 A and 80 kHz tripped its 70 C amplifier
+    limit, 0x4210), so the rest of the sweep would read as a stall."""
+    try:
+        sw = int(node.sdo['StatusWord'].raw)
+    except Exception:
+        return
+    if not sw & 0x08:
+        return
+    try:
+        code = describe_error(int(node.sdo['LastError'].raw))
+    except Exception:
+        code = 'unreadable'
+    try:
+        temp = ', amplifier {} C'.format(int(node.sdo['Amplifier']['Temperature'].raw))
+    except Exception:
+        temp = ''
+    raise EZeroError('the drive faulted during the {} sweep (error {}{}): the field '
+                     'dropped, so this is not a stall'.format(leg, code, temp))
+
+
 def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sleep):
     """Run the sweep on a canopen RemoteNode and return solve()'s result.
 
@@ -162,6 +184,7 @@ def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sle
                 done += 1
                 if progress:
                     progress(done / float(total))
+            _raise_if_faulted(node, 'forward' if direction > 0 else 'reverse')
     finally:
         try:
             sdo['Motor']['ud'].raw = 0

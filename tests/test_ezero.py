@@ -147,3 +147,25 @@ class TestSweepRamp(unittest.TestCase):
         self.assertEqual(drive.ud_writes[-1], 0)
         self.assertEqual(r['e_polarity'], 1)
         self.assertLess(abs(ezero.wrap(r['e_zero'] - 250, CPE)), 2)
+
+
+class TestSweepFault(unittest.TestCase):
+    def test_a_fault_mid_sweep_is_named_not_read_as_a_stall(self):
+        """An amplifier over-temperature (0x4210) drops the field; the rotor
+        stops and the travel check would call it a stall."""
+        drive = _Drive(e_zero=250, stale_id=0)
+        cell = lambda v: _Var(lambda: v, lambda _: None)
+        drive.sdo['StatusWord'] = cell(0x0008)
+        drive.sdo['LastError'] = cell(0x4210)
+        drive.sdo['Amplifier'] = {'Temperature': cell(71)}
+        with self.assertRaises(ezero.EZeroError) as cm:
+            ezero.sweep(drive, sleep=lambda s: None)
+        self.assertIn('0x4210', str(cm.exception))
+        self.assertIn('forward', str(cm.exception))
+        self.assertIn('71 C', str(cm.exception))
+        self.assertEqual(drive.ud_writes[-1], 0)              # left de-energised
+
+    def test_no_fault_bit_sweeps_on(self):
+        drive = _Drive(e_zero=250, stale_id=0)
+        drive.sdo['StatusWord'] = _Var(lambda: 0x0237, None)
+        self.assertEqual(ezero.sweep(drive, sleep=lambda s: None)['e_polarity'], 1)
