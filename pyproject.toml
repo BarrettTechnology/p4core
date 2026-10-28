@@ -11,6 +11,7 @@ dependencies = [
     "canopen>=2.2",
     "python-can>=4.3",
     "semver>=3",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -18,8 +19,8 @@ candlelight = ["pyusb", "libusb-package"]
 
 [tool.setuptools]
 # The repository root is the package, as in p4sysid.
-package-dir = {"p4core" = "."}
-packages = ["p4core"]
+package-dir = {"p4core" = ".", "p4core.actuator" = "actuator"}
+packages = ["p4core", "p4core.actuator"]
 
 [tool.setuptools.package-data]
 p4core = ["data/*.eds", "data/templates/*.csv"]
