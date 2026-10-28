@@ -63,6 +63,11 @@ class TestCanBar(unittest.TestCase):
                           self.bar.choice_port.GetStringSelection()),
                          ('can3', 'can3'))
 
+    def test_no_port_until_one_is_picked(self):
+        self.assertFalse(self.bar.select_port(None))
+        self.assertIsNone(self.bar.port())
+        self.assertEqual(self.bar.choice_port.GetCount(), 2)   # still listed
+
     def test_fill_ports_keeps_a_named_selection(self):
         self.bar.fill_ports(PORTS, select='can2')
         self.assertEqual(self.bar.port(), 'can2')

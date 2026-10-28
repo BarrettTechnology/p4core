@@ -79,12 +79,17 @@ class CanBar:
 
     def select_port(self, port, add=True):
         """Select *port*; one not listed (an adapter not plugged in yet) is
-        added under its bare name when *add*.  True if it is selected."""
+        added under its bare name when *add*.  True if it is selected.
+        None selects no port (port() is then None), for an app that must not
+        open a port before the user picks one."""
+        if port is None:
+            self.choice_port.SetSelection(wx.NOT_FOUND)
+            return False
         for i in range(self.choice_port.GetCount()):
             if self.choice_port.GetClientData(i) == port:
                 self.choice_port.SetSelection(i)
                 return True
-        if not add or not port:
+        if not add:
             return False
         self.choice_port.SetSelection(self.choice_port.Append(port, port))
         return True
