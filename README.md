@@ -14,8 +14,9 @@ Each app is split model / controller / view:
 * **shared algorithms** — `tuning` (pucktuner's current / velocity /
   position gain design and PWM selection), `ezero`, `calibrate`.
 * **views** — `cli` (argparse subcommands, `ConsoleReporter`) and the wx GUI
-  (each app's own `WxReporter`), both calling the same controllers.  Nothing
-  in p4core imports wx.
+  (each app's own `WxReporter`), both calling the same controllers.  The one
+  wx module is `canbar`, the CAN Port / Scan Pucks / Select ID bar the
+  GUIs share (the `gui` extra); nothing else in p4core imports wx.
 
 ## Shared commands
 

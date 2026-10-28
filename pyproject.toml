@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 candlelight = ["pyusb", "libusb-package"]
+# p4core.canbar, the GUIs' shared CAN port bar.
+gui = ["wxPython"]
 
 [tool.setuptools]
 # The repository root is the package, as in p4sysid.

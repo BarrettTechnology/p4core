@@ -575,3 +575,13 @@ def list_can_ports():
         os.path.basename(p) for p in _glob.glob(os.path.join(SYS_NET, 'can*'))
     )
     return [port_info(name) for name in names]
+
+
+def port_choices():
+    """The CAN ports a GUI's port dropdown offers, as {'port', 'label'} dicts:
+    the PCAN channels on Windows, every SocketCAN ``can*`` interface elsewhere
+    (labelled "port, bus (id), state").  'port' is what make_network takes."""
+    if platform.system() == 'Windows':
+        return [{'port': p, 'label': p} for p in
+                ('PCAN_USBBUS1', 'PCAN_USBBUS2', 'PCAN_USBBUS3', 'PCAN_USBBUS4')]
+    return list_can_ports()
