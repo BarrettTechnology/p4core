@@ -8,7 +8,8 @@ Two firmware lines are in the field:
     is a lag factor and 0x3024,4 a velocity gain factor in 0.01.  There is no
     logger/injection (0x3004/0x3015), so nothing that identifies a motor on
     the host can run, and no runout (0x3027) or cogging (0x302E) table.
-  * 4.4.0 and later (the 4.5.0 release): Rt/Lt in mOhm / uH, bias in Q12.4,
+  * 4.4.0 and later (the 5.0.0 release, numbered 4.5.0 until stm32 886889d,
+    so development builds report 4.5.0): Rt/Lt in mOhm / uH, bias in Q12.4,
     polarity in DS402 0x607E, 0x3013,5 an encoder latency trim in us and
     0x3024,4 the velocity bandwidth in 0.1 Hz.
 
@@ -32,10 +33,10 @@ except ImportError:                     # pragma: no cover - canopen is a depend
 
 from .flash import read_version
 
-#: The first version with the 4.5.0 units (mOhm/uH, Q12.4 bias, 0x607E ...).
+#: The first version with the 5.0.0 units (mOhm/uH, Q12.4 bias, 0x607E ...).
 CURRENT_LINE = (4, 4, 0)
 #: The release users are told to update to.
-RECOMMENDED = '4.5.0'
+RECOMMENDED = '5.0.0'
 
 #: name -> (probe object, what it is).  A feature is present when its probe
 #: object can be read.
@@ -57,8 +58,8 @@ FEATURES = collections.OrderedDict([
     ('pwm_periods', Feature((0x3001, 13), 'PWM periods per slot (0x3001,13)')),
     ('heartbeat_consumer', Feature((0x1016, 1), 'the heartbeat consumer (0x1016)')),
     ('legacy_polarity', Feature((0x3013, 3), 'polarity in 0x3013,3 (4.3.x)')),
-    # Derived, not probed: the 4.5.0 units and CSV layout (not legacy).
-    ('current_line', Feature(None, 'the 4.5.0 units and configuration layout')),
+    # Derived, not probed: the 5.0.0 units and CSV layout (not legacy).
+    ('current_line', Feature(None, 'the 5.0.0 units and configuration layout')),
 ])
 
 

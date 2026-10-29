@@ -134,7 +134,7 @@ PACKED_4_3_5 = ((4 << 24) | (3 << 8) | 5).to_bytes(4, 'little')
 
 def legacy_node(node_id=5, values=None):
     """A FakeNode that answers like firmware 4.3.5: packed 0x100A, the
-    0x3013,3 polarity, and none of the 4.5.0 objects (absent unless set)."""
+    0x3013,3 polarity, and none of the 5.0.0 objects (absent unless set)."""
     node = FakeNode(node_id, values)
     node.values.setdefault((0x100A, 0), PACKED_4_3_5)
     node.values.setdefault((0x3013, 3), b'\x01')
@@ -142,10 +142,10 @@ def legacy_node(node_id=5, values=None):
 
 
 def current_node(node_id=5, values=None):
-    """A FakeNode that answers like firmware 4.5.0 (string 0x100A, the
+    """A FakeNode that answers like firmware 5.0.0 (string 0x100A, the
     capture and injection objects)."""
     node = FakeNode(node_id, values)
-    node.values.setdefault((0x100A, 0), b'4.5.0')
+    node.values.setdefault((0x100A, 0), b'5.0.0')
     for key in ((0x3015, 1), (0x3004, 7), (0x3004, 13), (0x3027, 1), (0x302E, 1),
                 (0x3011, 12), (0x3011, 14), (0x3008, 7), (0x3001, 13)):
         node.values.setdefault(key, b'\0\0\0\0')

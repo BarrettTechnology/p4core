@@ -519,9 +519,9 @@ def apply(node, rows, node_id=None, reporter=None):
     drive_legacy = firmware.legacy(node)
     if line == '4.5' and drive_legacy:
         result.errors.append(
-            'this CSV is for firmware 4.5.0 (it has rows firmware {} lacks, and '
+            'this CSV is for firmware {} (it has rows firmware {} lacks, and '
             'Rt/Lt in mOhm/uH): nothing written -- load a 4.3.x CSV, or update '
-            'the firmware first'.format(firmware.detect(node).text))
+            'the firmware first'.format(firmware.RECOMMENDED, firmware.detect(node).text))
         reporter.warn(result.errors[-1])
         return result
     convert = line == '4.3' and not drive_legacy

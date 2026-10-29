@@ -35,10 +35,17 @@ class DetectTest(unittest.TestCase):
 
     def test_current(self):
         fw = firmware.detect(current_node())
-        self.assertEqual(fw.version, (4, 5, 0))
+        self.assertEqual(fw.version, (5, 0, 0))
         self.assertFalse(fw.legacy)
         self.assertTrue(fw.has('capture', 'runout', 'cogging', 'lq'))
         self.assertFalse(fw.has('legacy_polarity'))
+
+    def test_development_builds_are_current(self):
+        # 5.0.0 was numbered 4.5.0 until stm32 886889d.
+        for text, version in ((b'4.5.0', (4, 5, 0)), (b'4.4.0', (4, 4, 0))):
+            fw = firmware.detect(current_node(values={(0x100A, 0): text}))
+            self.assertEqual(fw.version, version)
+            self.assertFalse(fw.legacy)
 
     def test_cached_until_forget(self):
         node = legacy_node()
@@ -55,7 +62,7 @@ class DetectTest(unittest.TestCase):
     def test_require(self):
         with self.assertRaises(firmware.FirmwareUnsupported) as cm:
             firmware.require(legacy_node(), 'capture', 'runout', what='Auto Tune')
-        self.assertIn('Auto Tune needs firmware 4.5.0', str(cm.exception))
+        self.assertIn('Auto Tune needs firmware 5.0.0', str(cm.exception))
         self.assertIn('4.3.5', str(cm.exception))
         self.assertEqual(cm.exception.missing, ('capture', 'runout'))
         firmware.require(current_node(), 'capture', 'runout')
@@ -137,7 +144,7 @@ class CsvLineTest(unittest.TestCase):
         self.assertFalse(res.ok)
         self.assertEqual(res.written, 0)
         self.assertEqual(node.downloads, [])
-        self.assertIn('for firmware 4.5.0', res.errors[0])
+        self.assertIn('for firmware 5.0.0', res.errors[0])
 
     def test_legacy_csv_converted_on_current(self):
         node, rep = current_node(), _Notes()
