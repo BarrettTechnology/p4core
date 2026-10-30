@@ -87,6 +87,12 @@ LEAD_SCALE_MIN = 0.6
 MAX_GAP_X = 8.0
 POS_JUMP_X = 8.0
 MAX_BAD_FRAC = 0.02
+#: A capture whose 10 ms mean speed varies more than this times its mean is
+#: stick-slip, not a bus fault: node 5's EC16 (P4-16) asked for 60 rpm
+#: broke away at ~50 mA and surged to 400 rpm once a second, and its surges
+#: read as "jumps" (250 of 8118 frames).
+STICK_SLIP_X = 1.0
+STICK_SLIP_BIN = 10
 #: A revolution whose velocity residual is this many times its run's median
 #: is dropped from the analysis (a frame glitch the frame check missed).
 REV_NOISE_X = 5.0
@@ -223,6 +229,18 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
             if len(fr) < 10:
                 raise SysidError('the stream sent {} frames at {:+.0f} rpm'
                                  .format(len(fr), sgn * rpm))
+            spread = speed_spread(fr)
+            if spread and spread[1] > STICK_SLIP_X * abs(spread[0]):
+                k = 60.0 * cfg.get('control_hz', 0) / res \
+                    if cfg.get('control_hz') else None
+                raise SysidError(
+                    'the speed at {:+.0f} rpm is not steady (10 ms means '
+                    '{}): stick-slip, the velocity loop cannot hold it -- '
+                    'run the friction feed-forward first, or leave cogging '
+                    'out on a slotless motor'.format(
+                        sgn * rpm, '{:.0f} +- {:.0f} rpm'.format(
+                            spread[0] * k, spread[1] * k) if k else
+                        '{:.3f} +- {:.3f} counts/cycle'.format(*spread)))
             fr, bad = clean_frames(fr, res)
             if bad > MAX_BAD_FRAC * (len(fr) + bad):
                 raise SysidError('{} of {} stream frames at {:+.0f} rpm were '
@@ -286,6 +304,24 @@ def clean_frames(fr, res):
             # on from here.  The cycle count still spans it.
             keep.append(i)
     return fr[keep], len(fr) - len(keep)
+
+
+def speed_spread(fr, n=STICK_SLIP_BIN):
+    """(mean, std) of the speed in counts per control cycle over bins of
+    *n* stream frames (10 ms at 1 kHz), or None for too short a capture.
+    Steady motion has a std well under the mean; stick-slip does not."""
+    fr = np.asarray(fr, float)
+    m = (len(fr) - 1) // n
+    if m < 4:
+        return None
+    idx = np.arange(m + 1) * n
+    dc = np.mod(np.diff(fr[idx, 0]), 65536)
+    dp = np.mod(np.diff(fr[idx, 2]) + 2 ** 31, 2 ** 32) - 2 ** 31
+    ok = dc > 0
+    if ok.sum() < 4:
+        return None
+    v = dp[ok] / dc[ok]
+    return float(np.mean(v)), float(np.std(v))
 
 
 def kmax_for(pole_pairs, cap):

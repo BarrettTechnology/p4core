@@ -146,6 +146,8 @@ UD_STEP_MAX = 1500
 #: A winding that is shorted, or a gain calibration that is badly wrong, shows
 #: up as current running away from the ramp.
 CURRENT_ABORT_FACTOR = 1.6
+#: Reads averaged to confirm a ramp reading past the abort threshold.
+RAMP_CONFIRM_READS = 4
 
 #: Headroom allowed above the ud that the measured resistance says is needed.
 #: The ramp will not command past this multiple of its own estimate, so a
@@ -894,7 +896,8 @@ class P4Drive:
         ud = ud_start
         abort_a = target_a * CURRENT_ABORT_FACTOR
         ceiling = UD_ABSOLUTE_CAP
-        blind_rs = max(BLIND_MAX_RS_OHM, self._configured_rs_ohm() or 0.0)
+        known_rs = self._configured_rs_ohm()
+        blind_rs = max(BLIND_MAX_RS_OHM, known_rs or 0.0)
         blind_v = target_a * blind_rs + (
             BLIND_DEADTIME_V if blind_rs > BLIND_MAX_RS_OHM else 0.0)
         blind_limit = min(UD_ABSOLUTE_CAP, self.volts_to_ud(blind_v))
@@ -904,6 +907,16 @@ class P4Drive:
         while True:
             self._check_abort()
             measured = self.read_id_amps()
+            if measured > abort_a:
+                # Confirm it: a small target leaves the threshold a few
+                # noise widths away, and a rotor snapping onto a new field
+                # angle reads a transient.  Node 5's EC16 (0.10 A level,
+                # +-20 mA) read 0.18 A once at a ud that holds 0.155 A.
+                # ud is held, so real current is still there one settle on.
+                self._sleep(settle)
+                measured = sum(self.read_id_amps()
+                               for _ in range(RAMP_CONFIRM_READS)
+                               ) / float(RAMP_CONFIRM_READS)
             if measured > abort_a:
                 raise SysidAborted(
                     'd-axis current {:.2f} A ran past the {:.2f} A abort '
@@ -930,6 +943,16 @@ class P4Drive:
                               max(ud + UD_STEP_MIN,
                                   int(ud_needed * UD_ESTIMATE_HEADROOM)))
                 step = int((ud_needed - ud) / 4)
+                if known_rs:
+                    # The winding is never steeper than 1/R (the dead-time
+                    # knee only flattens it), so a step of the remaining
+                    # gap times R cannot pass the target.  ud_needed is
+                    # differenced from two reads, and a small target's
+                    # sense noise can make it anything: node 5's EC16
+                    # (10.3 ohm) jumped UD_STEP_MAX, 0.1 A, past a 0.10 A
+                    # level and read 0.17 A over its 0.16 A abort.
+                    step = min(step, self.volts_to_ud(
+                        (target_a - measured) * known_rs))
             else:
                 step = UD_PROBE_STEP
 
@@ -973,7 +996,8 @@ class P4Drive:
 
         Falls back to the chord when there is no usable previous point, or when
         the two points are too close together for their difference to mean
-        anything — an overshoot is better than a division by noise.
+        anything — an overshoot is better than a division by noise.  The
+        ramp caps the step it takes from this with the configured R.
         """
         if prev is not None:
             ud_prev, i_prev = prev
@@ -1002,7 +1026,7 @@ class P4Drive:
 
         Calibration.rt is the *line-to-line* terminal resistance in mohm and
         firmware halves it to get the dq value, so this halves it too.  Used
-        only to size a settling wait.
+        only to size a settling wait and to bound the ramp's steps.
         """
         try:
             rt = int(self.node.sdo['Calibration']['rt'].raw)

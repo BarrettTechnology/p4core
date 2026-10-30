@@ -157,6 +157,30 @@ class TestBadFrames(unittest.TestCase):
         self.assertEqual(revs[1]['bad_revs'], 0)
 
 
+class TestStickSlip(unittest.TestCase):
+    """Node 5's EC16 at 60 rpm: stuck, then a 400 rpm surge, once a second.
+    Its surges are motion, not bad frames."""
+
+    def test_steady_motion_is_steady(self):
+        mean, std = cogging.speed_spread(frames(n=400))
+        self.assertAlmostEqual(mean, 2.0, places=2)
+        self.assertLess(std, 0.1 * mean)
+
+    def test_a_surge_is_stick_slip(self):
+        step, n = 12, 1000
+        v = np.full(n, 0.05)                      # counts per cycle, stuck
+        v[300:360] = 1.6                          # the surge
+        v[800:860] = 1.6
+        pos = np.round(np.cumsum(v * step))
+        c = (step * np.arange(n)) % 65536
+        fr = np.column_stack([c, np.zeros(n), pos])
+        mean, std = cogging.speed_spread(fr)
+        self.assertGreater(std, cogging.STICK_SLIP_X * mean)
+
+    def test_too_short_is_none(self):
+        self.assertIsNone(cogging.speed_spread(frames(n=20)))
+
+
 class TestLeadScan(unittest.TestCase):
     def scan(self, best_us, budget=806.0):
         seen = []
