@@ -29,6 +29,7 @@ tui.py is the screen for this; the steps themselves need no terminal.
 import copy
 import math
 import time
+import traceback
 
 from . import cogging, commission, encoder, loops, pipeline
 from .commission import Limits, SysidError, drive_units, write_od
@@ -423,6 +424,9 @@ class Session:
                     self.results[st.key] = {'status': 'fail',
                                             'detail': str(exc)}
                     self.log('{}: FAILED: {}'.format(st.title, exc))
+                    # Where it failed: a bus error's message alone (an SDO
+                    # abort, "Unexpected response") does not say which call.
+                    self.log(traceback.format_exc().rstrip())
                     try:
                         self.dev.safe_stop()
                     except Exception:
