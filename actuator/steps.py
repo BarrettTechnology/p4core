@@ -28,6 +28,7 @@ tui.py is the screen for this; the steps themselves need no terminal.
 
 import copy
 import math
+import time
 
 from . import cogging, commission, encoder, loops, pipeline
 from .commission import Limits, SysidError, drive_units, write_od
@@ -398,12 +399,17 @@ class Session:
                     self.log('{}: skipped: {}'.format(st.title, why))
                     on_update(st.key)
                     continue
+                # Wall-clock per step, the cool-down wait apart: what the
+                # summary shows and what a speed-up is measured against.
+                t_start = time.monotonic()
+                cool_s = 0.0
                 try:
                     if st.key not in OPEN_LOOP_STEPS:
                         commission.require_isense(self.dev)
                     if st.key not in COLD_STEPS:
                         commission.wait_until_cool(self.dev, self.limits,
                                                    self.log)
+                        cool_s = time.monotonic() - t_start
                     detail = st.run(self) or ''
                     warns = [c for c in self.rep.checks[n_checks:]
                              if c['severity'] == 'warn']
@@ -421,6 +427,13 @@ class Session:
                         self.dev.safe_stop()
                     except Exception:
                         pass
+                elapsed = time.monotonic() - t_start
+                self.results[st.key]['seconds'] = elapsed
+                self.results[st.key]['cool_s'] = cool_s
+                self.log('{}: {:.1f} s{}'.format(
+                    st.title, elapsed,
+                    ' ({:.1f} s cooling first)'.format(cool_s)
+                    if cool_s >= 1.0 else ''))
                 on_update(st.key)
                 if ok and self.rerun:
                     # A step changed what earlier ones measured at (the PWM

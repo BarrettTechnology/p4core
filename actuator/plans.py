@@ -187,6 +187,25 @@ def summary(session, keys):
     return out
 
 
+def _seconds(session, key):
+    """'41 s' / '6.2 min' for a step that ran, '' otherwise."""
+    sec = session.results.get(key, {}).get('seconds')
+    if sec is None:
+        return ''
+    return '{:.0f} s'.format(sec) if sec < 600 else '{:.1f} min'.format(
+        sec / 60.0)
+
+
 def summary_text(session, keys):
-    return '\n'.join('{:2d}. {:<34} {:<7} {}'.format(n, t, s.upper(), d)
-                     .rstrip() for n, t, s, d in summary(session, keys))
+    """The verdict table, with each step's wall-clock time (cool-down
+    wait included) and the total."""
+    order = run_order(keys)
+    lines = ['{:2d}. {:<34} {:<7} {:>8}  {}'.format(
+        n, t, s.upper(), _seconds(session, k), d).rstrip()
+        for k, (n, t, s, d) in zip(order, summary(session, keys))]
+    total = sum(session.results.get(k, {}).get('seconds') or 0.0
+                for k in order)
+    if total:
+        lines.append('    {:<34} {:<7} {:>8}'.format(
+            'Total', '', '{:.1f} min'.format(total / 60.0)))
+    return '\n'.join(lines)
