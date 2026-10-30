@@ -464,9 +464,10 @@ LIN_DEAD_RATIO = 0.05
 
 
 def _encoder_filter(s):
-    """The hardware filter for this sensor (encfilter): a change is
-    saved and the drive rebooted, since firmware writes it only at boot.
-    Returns (plan, note)."""
+    """The hardware filter for this sensor (encfilter): a change is saved
+    and, on firmware that writes it only at boot (or a chip it never writes
+    at runtime, encfilter.apply), the drive rebooted.  Returns (plan,
+    note)."""
     from p4core.calibrate import save_single
     from . import encfilter
     p = encfilter.plan(s.dev.node)
@@ -478,23 +479,35 @@ def _encoder_filter(s):
         p['model'], p['encoder'], p['label'], p['target'], p['reason'],
         p['lag_deg'], encfilter.CROSSOVER_HZ)
     if p['change']:
-        if s.unsaved:
+        if s.unsaved and not encfilter.supports_live_filter(s.dev.node):
             raise StepFailed('the encoder filter needs a reboot and this '
                              'session has unsaved values: run Save first')
-        encfilter.apply(s.dev.node, p, save_single)
-        if s.reboot is None:
-            raise StepFailed('encoder filter {:#04x} -> {:#04x} saved; it '
-                             'takes effect at boot -- reboot the drive and run '
-                             'again'.format(p['current'], p['target']))
-        s.log('encoder: filter {:#04x} -> {:#04x}, rebooting'.format(
-            p['current'], p['target']))
-        node = s.reboot()
-        if node is not None:
-            s.dev.node = node
-        s.ctx.pop('s', None)
-        s._preflight_done = False
-        p['running'] = encfilter.read_running(s.dev.node)
-        detail += ' (was {:#04x}; saved, rebooted)'.format(p['current'])
+        if not encfilter.apply(s.dev.node, p, save_single):
+            s.log('encoder: filter {:#04x} -> {:#04x} (live, saved)'.format(
+                p['current'], p['target']))
+            p['running'] = encfilter.read_running(s.dev.node)
+            detail += ' (was {:#04x}; saved, live)'.format(p['current'])
+        else:
+            if s.unsaved:
+                raise StepFailed('encoder filter {:#04x} -> {:#04x} saved, '
+                                 'but the sensor takes it only at boot and '
+                                 'this session has unsaved values: run Save, '
+                                 'then reboot'.format(p['current'],
+                                                      p['target']))
+            if s.reboot is None:
+                raise StepFailed('encoder filter {:#04x} -> {:#04x} saved; '
+                                 'it takes effect at boot -- reboot the drive '
+                                 'and run again'.format(p['current'],
+                                                        p['target']))
+            s.log('encoder: filter {:#04x} -> {:#04x}, rebooting'.format(
+                p['current'], p['target']))
+            node = s.reboot()
+            if node is not None:
+                s.dev.node = node
+            s.ctx.pop('s', None)
+            s._preflight_done = False
+            p['running'] = encfilter.read_running(s.dev.node)
+            detail += ' (was {:#04x}; saved, rebooted)'.format(p['current'])
     if p['running'] is not None and p['running'] != p['target']:
         raise StepFailed('the sensor runs filter {:#04x}, not {:#04x} '
                          '(0x3013,9)'.format(p['running'], p['target']))

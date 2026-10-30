@@ -67,6 +67,8 @@ class LiveNode(Node):
             download(index, sub, data)
             if (index, sub) == (0x3013, 6):
                 sdo.od[(0x3013, 13)] = int(takes and data[0] != 0)
+                if takes and data[0] != 0:
+                    sdo.od[(0x3013, 9)] = data[0]      # the read-back
         self.sdo.download = live_download
 
 
@@ -282,6 +284,31 @@ class TestEncoderFilterStep(unittest.TestCase):
         s = steps.Session(_Dev(Node(5707, 0x30)), reboot=lambda: None)
         s.unsaved = True
         with self.assertRaisesRegex(steps.StepFailed, 'Save first'):
+            steps._encoder_filter(s)
+
+    def test_live_change_needs_no_reboot(self):
+        n = LiveNode(5707, 0x30, readback=0x30)
+        s = steps.Session(_Dev(n), reboot=lambda: self.fail('rebooted'))
+        s.unsaved = True                # a live write leaves RAM alone
+        p, note = steps._encoder_filter(s)
+        self.assertIs(s.dev.node, n)
+        self.assertEqual(note, 'filter 0x70 (was 0x30)')
+        self.assertEqual(n.sdo.saved, [0x301306])
+        self.assertEqual(p['running'], 0x70)
+        self.assertTrue(s.unsaved)
+
+    def test_live_firmware_not_taking_it_still_reboots(self):
+        n = LiveNode(5707, 0x30, takes=False, readback=0x30)
+        fresh = Node(5707, 0x70, readback=0x70)
+        s = steps.Session(_Dev(n), reboot=lambda: fresh)
+        steps._encoder_filter(s)
+        self.assertIs(s.dev.node, fresh)
+
+    def test_live_firmware_not_taking_it_with_unsaved_values_stops(self):
+        s = steps.Session(_Dev(LiveNode(5707, 0x30, takes=False)),
+                          reboot=lambda: self.fail('rebooted'))
+        s.unsaved = True
+        with self.assertRaisesRegex(steps.StepFailed, 'run Save, then reboot'):
             steps._encoder_filter(s)
 
     def test_sensor_not_running_it(self):
