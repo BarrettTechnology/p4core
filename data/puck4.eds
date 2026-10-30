@@ -3159,7 +3159,7 @@ DefaultValue=0
 [3015]
 ParameterName=CurrentInjection
 ObjectType=0x09
-SubNumber=19
+SubNumber=23
 
 [3015sub0]
 ParameterName=NumberOfEntries
@@ -3292,6 +3292,34 @@ ParameterName=DragDampingGainQ8
 ObjectType=0x07
 DataType=0x0006
 AccessType=rw
+DefaultValue=0
+
+[3015sub13]
+ParameterName=StepPulseLength
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+
+[3015sub14]
+ParameterName=IsenseBurstSampleIndex
+ObjectType=0x07
+DataType=0x0005
+AccessType=rw
+DefaultValue=0
+
+[3015sub15]
+ParameterName=IsenseBurstSampleAt
+ObjectType=0x07
+DataType=0x0007
+AccessType=ro
+DefaultValue=0
+
+[3015sub16]
+ParameterName=IsenseBurstSamplesTaken
+ObjectType=0x07
+DataType=0x0005
+AccessType=ro
 DefaultValue=0
 
 [3016]
