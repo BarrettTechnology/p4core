@@ -243,10 +243,34 @@ class TestCalibrateMenuSettings(unittest.TestCase):
         puck.hook_read('Alpha', 'Filtered', lambda: reads.append(1) or 2048 * 16)
         res = calibrate.calibrate_bias(puck, quick(RecordingReporter()),
                                        **calibrate.BIAS_MENU_QUICK)
-        self.assertEqual(len(reads), 100)
+        self.assertEqual(len(reads), calibrate.BIAS_MENU['samples'])
         self.assertEqual(puck.get('Alpha', 'Bias'), 2048 * 16)
         self.assertEqual(puck.get('Motor', 'uq'), 0)
         self.assertIn('previous_alpha_bias', res)
+
+    def test_bias_latches_the_reference_first(self):
+        puck = SimPuck()
+        puck.values[calibrate.REF_CAL] = 0
+        puck.values[calibrate.REF_READING] = 24260
+        res = calibrate.calibrate_bias(puck, quick(RecordingReporter()),
+                                       **calibrate.BIAS_MENU_QUICK)
+        self.assertEqual(res['ref_cal'], 24260)
+        self.assertEqual(puck.values[calibrate.REF_CAL], 24260)
+        first_filt = puck.reads.index(puck.key('Alpha', 'Filtered'))
+        self.assertLess(puck.reads.index(calibrate.REF_READING), first_filt)
+        self.assertIn(0x300909, self.saves(puck))
+
+    def test_bias_without_reference_object(self):
+        res = calibrate.calibrate_bias(SimPuck(), quick(RecordingReporter()),
+                                       **calibrate.BIAS_MENU_QUICK)
+        self.assertIsNone(res['ref_cal'])
+
+    def test_latch_ref_cal_averages(self):
+        puck = SimPuck()
+        puck.values[calibrate.REF_CAL] = 0
+        vals = iter([100, 102] * 100)
+        puck.read_hooks[calibrate.REF_READING] = lambda: next(vals)
+        self.assertEqual(calibrate.latch_ref_cal(puck, lambda s: None, 0.1), 101)
 
     def test_bias_band_is_the_firmware_window(self):
         # 101 counts off: outside the firmware's +-100, for both settings.

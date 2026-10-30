@@ -21,7 +21,7 @@ import math
 import struct
 import time
 
-from canopen.sdo.exceptions import SdoAbortedError
+from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
 from . import ezero
 from .flash import read_version
@@ -70,14 +70,16 @@ NEWTON_SETTLE_S = 0.05
 ID_FILTER_SETTLE_TAUS = 6.0
 
 #: puckutility's calibrate menu settings for the steps.  Bias: a shorter
-#: fixed settle, then a 100-sample average for sub-count precision, in the
-#: firmware's window.
+#: fixed settle, then a 250-sample average (about a second over SDO) for
+#: sub-count precision, in the firmware's window.  The zero wanders slowly
+#: (sub-Hz): a few hundred ms of it is a random point of that wander, ~0.25
+#: counts sd on a P4-42 even with beta's reference correction.
 #: Convergence polling was abandoned: the ADC's noise floor exceeds any
 #: practical threshold for variance-based settling.  The mean converges much
 #: faster than the noise floor; 0.5 s is 5-10x the firmware filter time
 #: constant.  QUICK trims it to 0.35 s (still 3.5-7x): this is the 0 A
 #: reference every later step subtracts, so it is not trimmed hard.
-BIAS_MENU = dict(settle_s=0.5, samples=100, sample_dwell_s=0.0,
+BIAS_MENU = dict(settle_s=0.5, samples=250, sample_dwell_s=0.0,
                  tolerance=BIAS_TOLERANCE)
 BIAS_MENU_QUICK = dict(BIAS_MENU, settle_s=0.35)
 #: Gain: the proportional ramp, sampling straight after it.
@@ -187,6 +189,42 @@ def _read_filtered(node, samples=16, dwell_s=0.005, sleep=time.sleep,
         if dwell_s:
             sleep(dwell_s)
     return {k: v / float(samples) for k, v in total.items()}
+
+
+#: Beta's ADC-reference correction (firmware after 5.0.0): 0x3009,9 holds the
+#: low-passed reference reading 0x3000,5 the bias was taken at, and the drive
+#: scales beta by it over the live reading.  0x3000,5 is 0 where the drive has
+#: no reading (the K64): then 0x3009,9 is written 0 and beta stays uncorrected.
+REF_CAL = (0x3009, 9)
+REF_READING = (0x3000, 5)
+REF_AVERAGE_S = 0.5
+REF_DWELL_S = 0.01
+
+
+def _u16(node, index, sub):
+    return struct.unpack('<H', node.sdo.upload(index, sub)[:2])[0]
+
+
+def latch_ref_cal(node, sleep=time.sleep, seconds=None):
+    """Write 0x3009,9 = 0x3000,5 averaged over *seconds*, so the bias averaged
+    next is taken at that reference; not saved here.  Returns the value
+    written, or None when the firmware has no 0x3009,9."""
+    try:
+        node.sdo.upload(*REF_CAL)
+    except SdoCommunicationError:
+        raise
+    except Exception:                     # abort, or absent from a test fake
+        return None
+    seconds = REF_AVERAGE_S if seconds is None else seconds
+    n = max(1, int(round(seconds / REF_DWELL_S)))
+    total = 0
+    for i in range(n):
+        if i:
+            sleep(REF_DWELL_S)
+        total += _u16(node, *REF_READING)
+    ref = int(round(total / float(n)))
+    node.sdo.download(REF_CAL[0], REF_CAL[1], struct.pack('<H', ref))
+    return ref
 
 
 def clear_slope(node):
@@ -327,7 +365,7 @@ def test_encoder(node, reporter=None, limit=ENCODER_MAX_JITTER):
     return result
 
 
-def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
+def calibrate_bias(node, reporter=None, settle_s=1.0, samples=100,
                    sample_dwell_s=0.005, tolerance=BIAS_TOLERANCE):
     """Current-sense bias (Alpha/Beta Bias, 0x3008/0x3009,3), zero current.
 
@@ -359,6 +397,9 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
             if left <= 0:
                 break
             reporter.sleep(min(0.05, left))
+        # Beta's reference point first: the drive scales beta to it from
+        # here on, so the bias below is taken in the same terms.
+        ref_cal = latch_ref_cal(node, reporter.sleep)
         # Filtered is Q12.4.  Firmware 4.4.0 and later keeps Bias in Q12.4
         # too, so it is stored as read; older firmware wants whole counts.
         filt = _read_filtered(node, samples, sample_dwell_s, reporter.sleep,
@@ -367,6 +408,8 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
             sdo[channel]['Bias'].raw = int(round(filt[channel] * scale / 16.0))
         save_single(node, 0x3008, 3)
         save_single(node, 0x3009, 3)
+        if ref_cal is not None:
+            save_single(node, *REF_CAL)
         a_bias = sdo['Alpha']['Bias'].raw / scale
         b_bias = sdo['Beta']['Bias'].raw / scale
     finally:
@@ -381,13 +424,17 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=16,
     reporter.note('Bias: alpha {:.3f} (was {:.3f}), beta {:.3f} (was {:.3f}) '
                   'counts, {}-sample average'.format(
                       a_bias, previous[0], b_bias, previous[1], samples))
+    if ref_cal is not None:
+        reporter.note('Beta reference correction: {}'.format(
+            'reference {:.2f} counts (0x3009,9)'.format(ref_cal / 16.0) if ref_cal
+            else 'none on this drive'))
     if not ok:
         _continue_or_raise(reporter, 'Current-sense bias out of bounds: alpha '
                            '{:.1f}, beta {:.1f} counts (acceptable {:.0f} - {:.0f}; '
                            'the drive refuses closed-loop current outside it).'
                            '\n\n{}'.format(a_bias, b_bias, lo, hi, _DEBUG_HINTS))
     return dict(alpha_bias=a_bias, beta_bias=b_bias, previous_alpha_bias=previous[0],
-                previous_beta_bias=previous[1], ok=ok)
+                previous_beta_bias=previous[1], ok=ok, ref_cal=ref_cal)
 
 
 def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,

@@ -1,14 +1,14 @@
 [FileInfo]
 FileName=new.eds
-FileVersion=4
-FileRevision=5
+FileVersion=5
+FileRevision=0
 EDSVersion=4.0
-Description=Barrett Puck 4 PMSM motor controller (firmware 4.5.0)
-CreationTime=04:45PM
-CreationDate=10-22-2026
+Description=Barrett Puck 4 PMSM motor controller (firmware 5.0.0)
+CreationTime=10:00PM
+CreationDate=10-29-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=04:45PM
-ModificationDate=10-22-2026
+ModificationTime=10:00PM
+ModificationDate=10-29-2026
 ModifiedBy=scripts/gen_eds.py
 
 [DeviceInfo]
@@ -2208,14 +2208,14 @@ DefaultValue=0
 [3000]
 ParameterName=Amplifier
 ObjectType=0x09
-SubNumber=5
+SubNumber=6
 
 [3000sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=4
+DefaultValue=5
 
 [3000sub1]
 ParameterName=BusVoltage
@@ -2240,6 +2240,13 @@ DefaultValue=0
 
 [3000sub4]
 ParameterName=AdcReferenceVoltage
+ObjectType=0x07
+DataType=0x0006
+AccessType=ro
+DefaultValue=0
+
+[3000sub5]
+ParameterName=AdcReferenceReading
 ObjectType=0x07
 DataType=0x0006
 AccessType=ro
@@ -2707,14 +2714,14 @@ DefaultValue=0
 [3009]
 ParameterName=Beta
 ObjectType=0x09
-SubNumber=9
+SubNumber=10
 
 [3009sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=8
+DefaultValue=9
 
 [3009sub1]
 ParameterName=Raw
@@ -2769,6 +2776,13 @@ DefaultValue=0
 ParameterName=DriveGatedOffset
 ObjectType=0x07
 DataType=0x0003
+AccessType=rw
+DefaultValue=0
+
+[3009sub9]
+ParameterName=RefCal
+ObjectType=0x07
+DataType=0x0006
 AccessType=rw
 DefaultValue=0
 

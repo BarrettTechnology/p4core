@@ -168,7 +168,7 @@ Dead time (ns),,0x3001,2,UNSIGNED16,250 # 211ns is exact (confirm this)
 Max prop delay (ns),,0x3001,3,UNSIGNED16,180
 Delta prop delay trim (ns),,0x3001,4,UNSIGNED16,0
 Max settling time (ns),,0x3001,5,UNSIGNED16,400
-Sampling time (ns),,0x3001,6,UNSIGNED16,313 
+Sampling time (ns),,0x3001,6,UNSIGNED16,613 # 24.5 ADC cycles from 5.0.0 (beta fold 1.1 -> 0.2 counts)
 Conversion time (ns),,0x3001,7,UNSIGNED16,313
 Max sensor current (mA),,0x3001,8,UNSIGNED16,28284
 Nominal bus voltage (V*10),,0x3001,9,UNSIGNED16,240 # 420
