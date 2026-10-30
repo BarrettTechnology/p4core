@@ -33,12 +33,12 @@ from .device import SysidError
 # Limits and design rules
 # ---------------------------------------------------------------------------
 #: How long a step waits for the winding (or the DSP standing in for it)
-#: to cool to max_temp_c - TEMP_START_MARGIN_C before it gives up.  The
+#: to cool under start_temp_c() before it gives up.  The
 #: thermal test ends hot on purpose: a GL40 board's DSP read 76 C after it,
 #: and came back under 45 C in a few minutes (tau 175 s).  0: do not wait.
 COOL_WAIT_S = 1800.0
 #: Seconds between temperature reads while waiting.
-COOL_POLL_S = 10.0
+COOL_POLL_S = 2.0
 #: The wait cools this far under the start gate: the DSP reads in whole
 #: degrees, and a winding that just made 44 C read 45.0 C at the preflight
 #: a moment later (node 3, Resistance).
@@ -47,14 +47,14 @@ COOL_HYSTERESIS_C = 1.0
 
 def wait_until_cool(dev, limits, log=None):
     """Wait, up to limits.cool_wait_s, for the winding temperature to fall
-    below max_temp_c - TEMP_START_MARGIN_C.  Returns the seconds waited.
+    below start_temp_c(limits).  Returns the seconds waited.
     Does nothing without a sensor or a limit; the preflight's check still
     decides."""
     log = log or dev._log
     wait = getattr(limits, 'cool_wait_s', 0) or 0
     if limits.max_temp_c is None or wait <= 0:
         return 0.0
-    target = limits.max_temp_c - TEMP_START_MARGIN_C - COOL_HYSTERESIS_C
+    target = start_temp_c(limits) - COOL_HYSTERESIS_C
     t, source = dev.read_winding_temp_c()
     if t is None or t < target:
         return 0.0
@@ -120,10 +120,24 @@ class Limits:
         return dict(vars(self))
 
 
-#: The winding must be at least this far below max_temp_c to start: a whole
-#: run warms a P4-42 by 15-19 C at the sensor (10 W test power), and a run
-#: cut off by the temperature limit part way through is wasted.
-TEMP_START_MARGIN_C = 20.0
+#: A run, and each step of it, starts only under this winding temperature
+#: (the DSP where there is no thermistor).  60 C is safe for the motors and
+#: boards (user, 2026-10-30).  The old gate, 20 C under the 65 C stop (45 C),
+#: was under a P4-16's idle DSP at 100 kHz PWM (43-46 C): node 5 spent 7 of
+#: 12 minutes waiting on switching heat, not on the winding.
+START_TEMP_C = 60.0
+#: ... and at least this far under max_temp_c, when the user's limit is low.
+TEMP_START_MARGIN_C = 5.0
+#: The switching-heat hold warms the board ~20 C on purpose: it starts
+#: with this much room under max_temp_c (steps._wait_board_cool).
+SWHEAT_START_MARGIN_C = 20.0
+
+
+def start_temp_c(limits):
+    """The temperature a step may start under: START_TEMP_C, or
+    TEMP_START_MARGIN_C under the user's max_temp_c when that is lower."""
+    return min(START_TEMP_C, limits.max_temp_c - TEMP_START_MARGIN_C)
+
 #: Bus within this fraction of NominalBusVoltage, or the gains and U_MAX are
 #: scaled for a different supply.
 BUS_TOLERANCE = 0.2
@@ -584,12 +598,12 @@ def _stage_preflight(dev, limits, reboot, rep):
             # step behind the copper under load.
             dev._log('commission: no thermistor: the DSP ({:.0f} C) stands '
                      'in for the winding'.format(t))
-        rep.check('winding temperature',
-                  t < limits.max_temp_c - TEMP_START_MARGIN_C,
-                  '{:.1f} C{}, limit {:.0f} C; a run needs {:.0f} C of room '
+        gate = start_temp_c(limits)
+        rep.check('winding temperature', t < gate,
+                  '{:.1f} C{}, limit {:.0f} C; a run starts under {:.0f} C '
                   '-- let it cool below {:.0f} C'.format(
-                      t, ' (DSP)' if source == 'DSP' else '', limits.max_temp_c, TEMP_START_MARGIN_C,
-                      limits.max_temp_c - TEMP_START_MARGIN_C), fatal=True)
+                      t, ' (DSP)' if source == 'DSP' else '',
+                      limits.max_temp_c, gate, gate), fatal=True)
     # The user polarity is 0x607E (DS402: 0x00, or 0xC0 to invert), which
     # the firmware only takes in those two values.  Firmware before stm32
     # 8a366c6 kept a +-1 sign at 0x3013,3 instead, refused every closed-loop
