@@ -20,7 +20,8 @@ class _Sdo:
         if (index, sub) not in self.od:
             raise KeyError((index, sub))
         v = self.od[(index, sub)]
-        return struct.pack('<B' if (index, sub) in ((0x3013, 6), (0x3013, 12)) else '<I', v)
+        return struct.pack('<B' if (index, sub) in ((0x3013, 6), (0x3013, 12), (0x3013, 13))
+                           else '<I', v)
 
     def download(self, index, sub, data):
         self.od[(index, sub)] = data[0] if len(data) == 1 else \
@@ -52,6 +53,61 @@ class Node:
 
 def _save(node, index, sub):
     node.sdo.saved.append((index << 8) | sub)
+
+
+class LiveNode(Node):
+    """Firmware with 0x3013,13: a write of 0x3013,6 reaches the sensor now
+    when *takes* (in IDLE, not an MA735), else waits for the boot."""
+    def __init__(self, code, filt, takes=True, **kw):
+        super().__init__(code, filt, **kw)
+        self.sdo.od[(0x3013, 13)] = 1
+        sdo, download = self.sdo, self.sdo.download
+
+        def live_download(index, sub, data):
+            download(index, sub, data)
+            if (index, sub) == (0x3013, 6):
+                sdo.od[(0x3013, 13)] = int(takes and data[0] != 0)
+        self.sdo.download = live_download
+
+
+class TestLive(unittest.TestCase):
+    def test_probe(self):
+        self.assertTrue(encfilter.supports_live_filter(LiveNode(5707, 0x80)))
+        self.assertFalse(encfilter.supports_live_filter(Node(5707, 0x80)))
+        self.assertIsNone(encfilter.read_in_effect(Node(5707, 0x80)))
+
+    def test_old_firmware_saves_and_needs_a_reboot(self):
+        n = Node(5707, 0x80)
+        self.assertTrue(encfilter.apply(n, dict(target=0x70, current=0x80), _save))
+        self.assertEqual(n.sdo.od[(0x3013, 6)], 0x70)
+        self.assertEqual(n.sdo.saved, [0x301306])
+
+    def test_live_takes_it_now(self):
+        n = LiveNode(5707, 0x80)
+        self.assertFalse(encfilter.apply(n, dict(target=0x70, current=0x80), _save))
+        self.assertEqual(n.sdo.saved, [0x301306])      # NV kept in step by default
+        self.assertTrue(encfilter.read_in_effect(n))
+
+    def test_live_without_save_leaves_nv(self):
+        n = LiveNode(5707, 0x80)
+        self.assertFalse(encfilter.apply(n, dict(target=0x70, current=0x80), _save,
+                                         save=False))
+        self.assertEqual(n.sdo.saved, [])
+        self.assertEqual(n.sdo.od[(0x3013, 6)], 0x70)
+
+    def test_not_taken_saves_and_needs_a_reboot(self):
+        # drive not in IDLE, or an MA735: stored for the boot, ,13 = 0
+        n = LiveNode(5755, 0x77, takes=False, chip=2)
+        self.assertTrue(encfilter.apply(n, dict(target=0x66, current=0x77), _save,
+                                        save=False))
+        self.assertEqual(n.sdo.saved, [0x301306])
+
+    def test_zero_needs_a_reboot(self):
+        # 0 = leave the sensor's own setting: nothing is written to it live
+        n = LiveNode(5707, 0x80)
+        self.assertTrue(encfilter.apply(n, dict(target=0, current=0x80), _save,
+                                        save=False))
+        self.assertEqual(n.sdo.saved, [0x301306])
 
 
 class TestChoice(unittest.TestCase):

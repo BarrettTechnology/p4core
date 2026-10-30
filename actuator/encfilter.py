@@ -3,8 +3,11 @@ product code.
 
 The product code (0x1018,2) names the model, and the model names its
 angle sensor.  Firmware writes 0x3013,6 to the sensor's filter-window
-register (0x0E) at boot, and only at boot.  So a new value needs Save.Single
-and a reboot.  On the K64, a 0 leaves the sensor's own NVM setting alone.
+register (0x0E) at boot.  From stm32 8cd9119 a write in IDLE reaches the
+sensor at once too (K64, and an STM32 MA736; not an MA735, whose register
+writes wear its NVM) and 0x3013,13 says it took: no reboot.  Before that,
+or where it did not take, a new value needs Save.Single and a reboot.  A 0
+leaves the sensor's own NVM setting alone.
 
 A wider filter window reads quieter at rest but lags the shaft.  The
 velocity loop sees that lag at its crossover, and the design caps the
@@ -57,6 +60,11 @@ OD_READBACK = (0x3013, 9)
 #: That firmware also refuses the other chip's 0x3013,6 values.
 OD_CHIP = (0x3013, 12)
 CHIPS = {1: 'MA736', 2: 'MA735'}
+#: 1 when the sensor holds 0x3013,6 now (stm32 8cd9119): set at boot, and by a
+#: write of 0x3013,6 in IDLE, which that firmware puts to the sensor at once
+#: and reads back (K64; STM32 with an MA736).  0 when it waits for the next
+#: boot: written outside IDLE, an MA735 (NVM), a sensor not identified, or 0.
+OD_IN_EFFECT = (0x3013, 13)
 
 #: Phase lag the filter may add at the velocity crossover ceiling, degrees.
 LAG_BUDGET_DEG = 5.0
@@ -313,8 +321,37 @@ def plan(node):
     return out
 
 
-def apply(node, p, save_single):
-    """Write *p*'s target to 0x3013,6 and save it (*save_single*(node,
-    index, sub)).  It takes effect at the next boot."""
+def supports_live_filter(node):
+    """True when the firmware puts a write of 0x3013,6 to the sensor at
+    once (in IDLE) and reports it in 0x3013,13 (stm32 8cd9119)."""
+    try:
+        node.sdo.upload(*OD_IN_EFFECT)
+    except Exception:
+        return False
+    return True
+
+
+def read_in_effect(node):
+    """0x3013,13: True when the sensor holds 0x3013,6 now, None on firmware
+    without it."""
+    try:
+        return bool(node.sdo.upload(*OD_IN_EFFECT)[0])
+    except Exception:
+        return None
+
+
+def apply(node, p, save_single, save=True):
+    """Write *p*'s target to 0x3013,6.  Returns True when it still needs a
+    reboot to reach the sensor, False when the sensor holds it now.
+
+    Live firmware (supports_live_filter) applies it in IDLE and 0x3013,13
+    confirms it: no reboot.  *save* then chooses whether NV gets it too
+    (*save_single*(node, index, sub)); False leaves NV to the session's own
+    Save, and a reboot before that puts the saved value back.  Otherwise
+    (older firmware, an MA735, a 0, or the drive not in IDLE) it is always
+    saved, and takes effect at the next boot."""
     node.sdo.download(OD_FILTER[0], OD_FILTER[1], struct.pack('<B', p['target']))
-    save_single(node, *OD_FILTER)
+    live = p['target'] != 0 and read_in_effect(node) is True
+    if save or not live:
+        save_single(node, *OD_FILTER)
+    return not live
