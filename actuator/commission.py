@@ -13,6 +13,7 @@
   provisional_i_cont, cap_i_peak, set_rated_torque
                      a working i_cont / i_peak / RatedTorque before the
                      motor's own are measured
+  i_cont_from_power  a starting i_cont from R and I_CONT_START_W
   write_od, drive_units
                      results to the drive's RAM in its units
 
@@ -395,6 +396,66 @@ def i_peak_policy(dev, limits, i_cont_ma):
     return i_peak, how, full
 
 
+#: The winding power a first i_cont estimate assumes, before the thermal
+#: step measures the real one: i_cont = sqrt(P / (1.5 R)) (amplitude, three
+#: phases).  10 W is the P4 family's ballpark -- a P4-42 (0.147 ohm) gives
+#: 6.7 A against a measured 5.9, a slotless P4-16 motor (2.7 ohm) 1.6 A where
+#: a template said 5 -- and it is what the PWM step's ripple floor and the
+#: steps' i_peak run on until then (node 3, 2026-10-30: the template's 5 A
+#: picked 20 kHz, where a K64's at-speed current sense held the coast).
+I_CONT_START_W = 10.0
+
+
+def i_cont_from_power(dev, ctx, r_ohm, limits=None, power_w=I_CONT_START_W):
+    """A starting i_cont from R: sqrt(*power_w* / (1.5 R)), written (RAM
+    only) when it is under the drive's own -- a template's, or a blank's
+    0.  A lower one is kept: it is a past session's measurement or already
+    the safer side.  i_peak follows (i_peak_policy), and RatedTorque when
+    it is derived.  Returns (i_cont mA, i_peak mA, replaced)."""
+    if not r_ohm or r_ohm <= 0:
+        return None
+    est = int(round(1000.0 * math.sqrt(power_w / (1.5 * r_ohm))))
+    cal = dev.node.sdo['Calibration']
+    have = int(cal['i_cont'].raw), int(cal['i_peak'].raw)
+    if 0 < have[0] <= est:
+        return have[0], have[1], False
+    i_peak, how, _ = i_peak_policy(dev, limits, est)
+    derived = _rated_is_derived(dev, read_kt(dev.node))
+    cal['i_cont'].raw = est
+    cal['i_peak'].raw = i_peak
+    if derived:
+        set_rated_torque(dev)
+    else:
+        set_rated_torque(dev, only_if_zero=True)
+    ctx['s'] = dev.refresh_scaling()
+    # RAM only: a reboot (poles, PWM) brings the drive's back, and
+    # restore_i_cont_estimate writes these again.
+    ctx['i_cont_est'] = (est, i_peak)
+    ctx['i2t_changed'] = True       # i2t takes them at boot: Save reboots
+    dev._log('commission: i_cont {} -> {} mA ({:g} W in {:.4g} ohm/ph), '
+             'i_peak {} mA ({}) -- the thermal step replaces them'.format(
+                 have[0], est, power_w, r_ohm, i_peak, how))
+    return est, i_peak, True
+
+
+def restore_i_cont_estimate(dev, ctx):
+    """Write i_cont_from_power's estimate again after a reboot brought the
+    drive's own (NV) values back.  Returns True when it wrote them."""
+    est = ctx.get('i_cont_est')
+    if not est:
+        return False
+    cal = dev.node.sdo['Calibration']
+    if (int(cal['i_cont'].raw), int(cal['i_peak'].raw)) == tuple(est):
+        return False
+    cal['i_cont'].raw, cal['i_peak'].raw = est
+    if _rated_is_derived(dev, read_kt(dev.node)):
+        set_rated_torque(dev)
+    ctx['s'] = dev.refresh_scaling()
+    dev._log('commission: i_cont {} mA, i_peak {} mA written again after '
+             'the reboot (RAM only)'.format(*est))
+    return True
+
+
 def provisional_i_cont(dev, ctx, limits=None):
     """i_cont/i_peak to work with before the thermal step (now last, right
     before Save) has measured the real ones: the drive's own when it has
@@ -521,8 +582,10 @@ class _Report:
         severity = 'pass' if ok else ('fail' if fatal else 'warn')
         self.checks.append({'name': name, 'ok': bool(ok),
                             'severity': severity, 'detail': detail})
-        self.dev._log('commission: [{}] {}: {}'.format(
-            severity.upper(), name, detail))
+        # A pass is in the step's verdict; only --verbose shows each one.
+        log = self.dev._log if not ok else getattr(self.dev, '_detail',
+                                                   self.dev._log)
+        log('commission: [{}] {}: {}'.format(severity.upper(), name, detail))
         if not ok and fatal:
             raise SysidError('{} failed: {}'.format(name, detail))
 
@@ -570,10 +633,12 @@ def _stage_preflight(dev, limits, reboot, rep):
     v['i_peak_a'] = s['i_max_a']
     v['enc_res'] = s['enc_res']
     rep.check('config loaded', s['i_max_a'] > 0 and s['enc_res'] > 0,
-              'i_peak {:.0f} mA, encoder {} counts: load the model\'s CSV '
-              '(p4core load_config) first -- i_peak sizes every test '
-              'current, and a blank one makes them 0 A'.format(
-                  s['i_max_a'] * 1e3, s['enc_res']), fatal=True)
+              'i_peak {:.0f} mA, encoder {} counts{}'.format(
+                  s['i_max_a'] * 1e3, s['enc_res'],
+                  '' if s['i_max_a'] > 0 and s['enc_res'] > 0 else
+                  ': load the model\'s CSV (p4core load_config) first -- '
+                  'i_peak sizes every test current, and a blank one makes '
+                  'them 0 A'), fatal=True)
     bus = dev.read_bus_v()
     v['bus_v'] = c['bus'] = bus
     rep.check('bus voltage', bus is not None and bus > 0,
@@ -600,10 +665,12 @@ def _stage_preflight(dev, limits, reboot, rep):
                      'in for the winding'.format(t))
         gate = start_temp_c(limits)
         rep.check('winding temperature', t < gate,
-                  '{:.1f} C{}, limit {:.0f} C; a run starts under {:.0f} C '
-                  '-- let it cool below {:.0f} C'.format(
-                      t, ' (DSP)' if source == 'DSP' else '',
-                      limits.max_temp_c, gate, gate), fatal=True)
+                  '{:.1f} C{}, limit {:.0f} C; a run starts under {:.0f} C{}'
+                  .format(t, ' (DSP)' if source == 'DSP' else '',
+                          limits.max_temp_c, gate,
+                          '' if t < gate else
+                          ' -- let it cool below {:.0f} C'.format(gate)),
+                  fatal=True)
     # The user polarity is 0x607E (DS402: 0x00, or 0xC0 to invert), which
     # the firmware only takes in those two values.  Firmware before stm32
     # 8a366c6 kept a +-1 sign at 0x3013,3 instead, refused every closed-loop

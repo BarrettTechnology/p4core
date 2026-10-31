@@ -463,12 +463,15 @@ class P4Drive:
     """
 
     def __init__(self, node, log=None, should_abort=None, settle_scale=1.0,
-                 pump=None, sync=None):
+                 pump=None, sync=None, detail=None):
         self.node = node
         # Whoever owns the SYNC producer (p4gui: its P4Model); made on first
         # use from node.network otherwise.  See _NetworkSync.
         self._sync = sync
         self._log = log or (lambda msg: None)
+        # A sweep's per-point lines: the log unless the caller has a quieter
+        # channel (Reporter.detail: the console shows them with --verbose).
+        self._detail = detail or self._log
         self._should_abort = should_abort or (lambda: False)
         self._pump = pump
         self.scaling = {}
@@ -617,12 +620,16 @@ class P4Drive:
                              'current per-mille readings would all scale to zero; '
                              'load the template first')
         self.scaling = s
-        self._log('scaling: i_peak={:.0f} mA  V_nom={:.1f} V  U_MAX={:.2f} V  '
-                  'poles={}  enc={} cts/rev  rated={:.0f} mNm  PWM={:.0f} Hz  '
-                  'control={:.0f} Hz'
-                  .format(s['i_peak_ma'], s['v_nom'], s['u_max_v'], s['poles'],
-                          s['enc_res'], s['rated_torque_mnm'], s['pwm_freq_hz'],
-                          s['control_hz']))
+        line = ('scaling: i_peak={:.0f} mA  V_nom={:.1f} V  U_MAX={:.2f} V  '
+                'poles={}  enc={} cts/rev  rated={:.0f} mNm  PWM={:.0f} Hz  '
+                'control={:.0f} Hz'
+                .format(s['i_peak_ma'], s['v_nom'], s['u_max_v'], s['poles'],
+                        s['enc_res'], s['rated_torque_mnm'], s['pwm_freq_hz'],
+                        s['control_hz']))
+        # Every step refreshes it: a line only when something changed.
+        if line != getattr(self, '_scaling_line', None):
+            self._scaling_line = line
+            self._log(line)
         return s
 
     def pwm_periods_max(self):

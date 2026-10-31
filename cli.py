@@ -177,7 +177,7 @@ def main(parser, argv=None, session_factory=Session, failures=(), aborts=()):
                         format='%(levelname)s %(name)s: %(message)s')
     reporter = ConsoleReporter(
         stream=sys.stderr if args.json else sys.stdout,
-        assume_yes=args.yes, quiet=args.quiet)
+        assume_yes=args.yes, quiet=args.quiet, verbose=args.verbose)
     ctx = Context(args, reporter)
     session = None
     try:

@@ -392,7 +392,7 @@ class Session:
                 i += 1
                 self.results[st.key] = {'status': 'running', 'detail': ''}
                 on_update(st.key)
-                self.log('=== {} ==='.format(st.title))
+                self.log('=== {} ({}/{}) ==='.format(st.title, i, len(todo)))
                 n_checks = len(self.rep.checks)
                 why = unavailable(self.dev.node, st.key)
                 if why:
@@ -434,10 +434,9 @@ class Session:
                 elapsed = time.monotonic() - t_start
                 self.results[st.key]['seconds'] = elapsed
                 self.results[st.key]['cool_s'] = cool_s
-                self.log('{}: {:.1f} s{}'.format(
-                    st.title, elapsed,
-                    ' ({:.1f} s cooling first)'.format(cool_s)
-                    if cool_s >= 1.0 else ''))
+                if cool_s >= 1.0:
+                    self.log('{}: {:.1f} s cooling first'.format(st.title,
+                                                                 cool_s))
                 on_update(st.key)
                 if ok and self.rerun:
                     # A step changed what earlier ones measured at (the PWM
@@ -721,9 +720,10 @@ def _r_runout(s):
                             lin['travel_ratio']))
             return detail + ', linearity re-check: rotor did not follow'
         s.rep.check('Encoder linearity (after runout)', lin['passed'],
-                    '{:.1f} deg past {:.1f} after compensation: check the '
-                    'magnet and the encoder mounting'.format(
-                        lin['max_err'], lin['threshold']))
+                    '{:.1f} deg after compensation (limit {:.1f}){}'.format(
+                        abs(lin['max_err']), lin['threshold'],
+                        '' if lin['passed'] else
+                        ': check the magnet and the encoder mounting'))
         detail += ', encoder linearity after {:.1f} deg'.format(lin['max_err'])
         if lin.get('ripple_rms') is not None:
             detail += ' (rotor ripple {:.1f} deg rms, not judged)'.format(

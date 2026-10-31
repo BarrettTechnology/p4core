@@ -180,6 +180,6 @@ Beta Shunt (mOhms),,0x3009,5,UNSIGNED16,15
 Encoder resolution (cts),,0x3013,1,UNSIGNED32,4096
 Encoder user zero (cts),,0x3013,2,UNSIGNED32,0
 Encoder type,,0x3013,4,UNSIGNED8,0
-Encoder lag factor,,0x3013,5,UNSIGNED16,0
+Encoder latency fixed-time part (us),,0x3013,5,INTEGER16,-34 # signed: the firmware default (measured on a P4-42) which the encoder latency step trims
 
 User polarity (0xC0 inverts),,0x607E,0,UNSIGNED8,0x00

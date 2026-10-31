@@ -57,6 +57,12 @@ class Reporter:
     def note(self, text):
         pass
 
+    def detail(self, text):
+        """A measurement's per-point data (each level of a sweep): a log
+        that shows everything takes it as a note; the console only with
+        --verbose."""
+        self.note(text)
+
     def warn(self, text):
         self.note('WARNING: ' + text)
 
@@ -109,10 +115,11 @@ class ConsoleReporter(Reporter):
 
     *assume_yes* answers every confirm() with yes (the CLI's ``--yes``).
     *quiet* drops status lines, keeping notes, warnings and errors.
+    *verbose* shows detail lines (a sweep's every point).
     """
 
     def __init__(self, stream=None, interactive=None, assume_yes=False,
-                 quiet=False):
+                 quiet=False, verbose=False):
         super().__init__()
         self.stream = stream or sys.stdout
         if interactive is None:
@@ -120,6 +127,7 @@ class ConsoleReporter(Reporter):
         self.interactive = interactive
         self.assume_yes = assume_yes
         self.quiet = quiet
+        self.verbose = verbose
         self._bar_open = False
         self._last_pct = None
         self._tty = bool(getattr(self.stream, 'isatty', lambda: False)())
@@ -142,6 +150,10 @@ class ConsoleReporter(Reporter):
 
     def note(self, text):
         self._line(text)
+
+    def detail(self, text):
+        if self.verbose and not self.quiet:
+            self._line(text)
 
     def warn(self, text):
         self._line('WARNING: ' + text, sys.stderr)
@@ -201,6 +213,9 @@ class RecordingReporter(Reporter):
 
     def note(self, text):
         self.events.append(('note', text))
+
+    def detail(self, text):
+        self.events.append(('detail', text))
 
     def warn(self, text):
         self.events.append(('warn', text))

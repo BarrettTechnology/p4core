@@ -140,7 +140,8 @@ def make_session(node, reporter, sync=None, reboot=None, limits=None,
     from .device import P4Drive
     dev = (device_class or P4Drive)(node, log=reporter.note,
                                     should_abort=reporter.should_abort,
-                                    sync=sync)
+                                    sync=sync,
+                                    detail=getattr(reporter, 'detail', None))
     return steps.Session(dev, limits or Limits(), reboot=reboot,
                          export_path=export_path, **session_kw)
 
@@ -153,18 +154,18 @@ def run(session, keys, reporter=None, on_update=None):
 
     def update(key):
         res = session.results.get(key, {})
-        if reporter is not None:
-            if res.get('status') == 'running':
-                reporter.status('{} ({}/{})'.format(title(key), len(done) + 1,
-                                                    len(todo)))
-            else:
-                done.add(key)
-                reporter.progress(100 * len(done) // max(len(todo), 1))
-                line = '{}: {} {}'.format(title(key),
-                                          res.get('status', '?').upper(),
-                                          res.get('detail', ''))
-                (reporter.warn if res.get('status') in ('fail', 'warn')
-                 else reporter.note)(line.rstrip())
+        # The step's own '=== title (n/N) ===' heading is the session's
+        # log; here only its verdict, with the time it took.
+        if reporter is not None and res.get('status') != 'running':
+            done.add(key)
+            reporter.progress(100 * len(done) // max(len(todo), 1))
+            sec = res.get('seconds')
+            line = '{}: {} {}{}'.format(
+                title(key), res.get('status', '?').upper(),
+                res.get('detail', ''),
+                '  ({:.1f} s)'.format(sec) if sec is not None else '')
+            (reporter.warn if res.get('status') in ('fail', 'warn')
+             else reporter.note)(line.rstrip())
         if on_update is not None:
             on_update(key)
 
