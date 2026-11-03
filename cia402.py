@@ -119,6 +119,9 @@ ERROR_CODES = {
     0x8180: 'SYNC timeout',
     0x8140: 'CAN bus-off',
     0x8130: 'heartbeat consumer timeout',
+    0x8482: 'velocity tracking fault',
+    0x8680: 'position tracking fault',
+    # Older firmware (before 5.0.4)
     0x8411: 'velocity tracking warning',
     0x8414: 'velocity tracking fault',
     0x8418: 'velocity limit active',
