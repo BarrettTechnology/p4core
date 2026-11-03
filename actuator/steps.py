@@ -15,13 +15,20 @@ drive's rt when Resistance was left out, and the drag uses the drive's kt.
 A new motor therefore needs every identify step once.  After that, any
 single step can be repeated on its own.
 
-Nothing is saved to NVM except by the Save step (one Save.All), and by the
-steps that must save to take effect:
+A step's results reach NVM as soon as it passes (or passes with a warning),
+so a later failure or a power cycle cannot lose them: the Session does one
+Save.All after each step that left unsaved values in RAM (Session._autosave).
+Some steps save for themselves:
 
   - The board calibrations (bias, gain, settling, slope, offset fold)
     save themselves with Save.Single (p4core.calibrate, slope).
   - Poles, PWM frequency and the encoder filter are latched at boot: they
     are saved, and the drive is rebooted.
+
+A failed step saves nothing, but what it wrote may still be in RAM, and
+Save.All takes all of RAM.  So the next run reboots the drive first, which
+puts it back on what NVM holds (Session._discard_failed).  The Save step
+remains for values written by hand, and it does the reboot i2t needs.
 
 tui.py is the screen for this; the steps themselves need no terminal.
 """
@@ -40,6 +47,11 @@ from p4core.calibrate import read_friction, read_kt
 
 class StepFailed(SysidError):
     pass
+
+
+class _SaveFailed(StepFailed):
+    """The step passed but its Save.All did not: its results are good, and
+    still in RAM."""
 
 
 class Step:
@@ -185,11 +197,14 @@ class Session:
     'reboot and run again'.  *skip_k*, *geared*, *max_vel_hz* and *delta*
     are the runout and velocity options from commission_motor.  *export_path* is
     where Export CSV writes (default: <model>-node<N>-<date>.csv here).
+    *autosave* False leaves each step's results in RAM for the Save step.
     """
 
     def __init__(self, dev, limits=None, reboot=None, skip_k=(), geared=False,
-                 max_vel_hz=None, delta=None, log=None, export_path=None):
+                 max_vel_hz=None, delta=None, log=None, export_path=None,
+                 autosave=True):
         self.dev = dev
+        self.autosave = autosave
         self.export_path = export_path
         self.limits = limits or Limits()
         self.reboot = reboot
@@ -199,6 +214,7 @@ class Session:
         self.rep = commission._Report(dev)
         self.results = {}            # key -> {'status', 'detail', 'result'}
         self.unsaved = False
+        self._failed_in_ram = False  # a failed step's writes may be in RAM
         self.last_export = None
         self._preflight_done = False
 
@@ -369,11 +385,73 @@ class Session:
         write_od(self.dev, drive_units(self.values), keys)
         self.unsaved = True
 
+    # -- saving -----------------------------------------------------------
+    def _reboot(self):
+        node = self.reboot()
+        if node is not None:
+            self.dev.node = node
+        self.ctx.pop('s', None)
+        self._preflight_done = False
+
+    def _autosave(self, st):
+        """One Save.All after a step that passed, if it left values in RAM.
+        Save and Export are not results to save."""
+        if not self.autosave or not self.unsaved or st.key in ('save',
+                                                               'export'):
+            return
+        if self._failed_in_ram:
+            self.rep.check('Saved to NV', False, 'not saved: RAM may hold a '
+                           'failed step\'s values -- reboot the drive')
+            return
+        try:
+            pipeline.save_all(self.dev)
+        except Exception as exc:
+            raise _SaveFailed('passed, but Save.All failed, so the results '
+                              'are only in RAM: {}'.format(exc)) from exc
+        self.unsaved = False
+        self.log('{}: saved to NV (Save.All)'.format(st.title))
+
+    def _discard_failed(self):
+        """Back on what NVM holds after a failed step, so that this run's
+        Save.All cannot store what it left in RAM.  Everything that passed
+        before it is already saved."""
+        if not self._failed_in_ram or self.reboot is None:
+            return
+        self.log('rebooting: the last failed step may have left values in RAM')
+        try:
+            self._reboot()
+        except Exception as exc:          # noqa: BLE001 -- _autosave stays off
+            self.log('could not reboot the drive: {}'.format(exc))
+            return
+        self._failed_in_ram = False
+        self.unsaved = False
+        # A blank drive's stand-ins were RAM too: the next step sets them again.
+        self.ctx.pop('currents_provisional', None)
+
+    def _finish_i2t(self):
+        """i2t takes i_cont/i_peak only at boot: reboot once, at the end of
+        a run that saved new ones, not between its steps."""
+        if not self.ctx.get('i2t_changed'):
+            return
+        if self.reboot is None:
+            self.log('i_cont/i_peak changed: i2t takes them at boot -- reboot '
+                     'the drive')
+            return
+        try:
+            self._reboot()
+        except Exception as exc:          # noqa: BLE001 -- the results are saved
+            self.log('i_cont/i_peak are saved, but the reboot i2t needs '
+                     'failed: {}'.format(exc))
+            return
+        self.ctx['i2t_changed'] = False
+        self.log('rebooted (i2t takes i_cont/i_peak at boot)')
+
     # -- running ----------------------------------------------------------
     def run(self, keys, on_update=None):
         """Run the steps in *keys*, in STEPS order, stopping at the first
-        failure.  *on_update(key)* is called before and after each step.
-        Returns True when every one passed."""
+        failure, saving each one's results as it passes (_autosave).
+        *on_update(key)* is called before and after each step.  Returns True
+        when every one passed."""
         on_update = on_update or (lambda key: None)
         todo = [st for st in STEPS if st.key in set(keys)]
         self.selected = {st.key for st in todo}
@@ -383,6 +461,7 @@ class Session:
         saved_temp = self.dev.max_temp_c
         self.dev.max_temp_c = self.limits.max_temp_c
         self._preflight_done = False
+        self._discard_failed()
         self._quiet_bus()
         ok = True
         i = 0
@@ -404,6 +483,7 @@ class Session:
                 # summary shows and what a speed-up is measured against.
                 t_start = time.monotonic()
                 cool_s = 0.0
+                unsaved_before = self.unsaved
                 try:
                     if st.key not in OPEN_LOOP_STEPS:
                         commission.require_isense(self.dev)
@@ -412,6 +492,7 @@ class Session:
                                                    self.log)
                         cool_s = time.monotonic() - t_start
                     detail = st.run(self) or ''
+                    self._autosave(st)
                     warns = [c for c in self.rep.checks[n_checks:]
                              if c['severity'] == 'warn']
                     status = 'warn' if warns else 'pass'
@@ -421,6 +502,9 @@ class Session:
                     self.results[st.key] = {'status': status, 'detail': detail}
                 except Exception as exc:      # noqa: BLE001 -- shown, not hidden
                     ok = False
+                    if self.autosave and not isinstance(exc, _SaveFailed):
+                        self._failed_in_ram = True
+                        self.unsaved = unsaved_before
                     self.results[st.key] = {'status': 'fail',
                                             'detail': str(exc)}
                     self.log('{}: FAILED: {}'.format(st.title, exc))
@@ -451,6 +535,8 @@ class Session:
                     break
         finally:
             self.dev.max_temp_c = saved_temp
+        if ok and self.autosave:
+            self._finish_i2t()
         return ok
 
 
@@ -775,12 +861,8 @@ def _r_save(s):
         s.rep.check('i2t', False, 'i_cont/i_peak changed: i2t takes them at '
                     'boot -- reboot the drive')
         return 'Save.All done; reboot for i2t'
-    node = s.reboot()
-    if node is not None:
-        s.dev.node = node
-    s.ctx.pop('s', None)
+    s._reboot()
     s.ctx['i2t_changed'] = False
-    s._preflight_done = False
     return 'Save.All done, rebooted (i2t takes i_cont/i_peak at boot)'
 
 

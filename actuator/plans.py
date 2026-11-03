@@ -24,9 +24,9 @@ by_stage() lists any selection under the dependency stages (prereqs.stages);
 a selection always runs in steps.STEPS order (Session.run).
 
 make_session() and run() are what the apps call: no windows here, progress
-goes to a p4core Reporter.  Nothing is saved to NV except by the steps that
-must save to take effect (steps.py) and by save(), which the caller runs
-only when the user asks.
+goes to a p4core Reporter.  Each step's results are saved to NV as soon as it
+passes (steps.py), so a later failure does not lose them; session.unsaved is
+then only set when that Save.All failed, which save() can try again.
 """
 
 from . import prereqs, steps
@@ -174,7 +174,7 @@ def run(session, keys, reporter=None, on_update=None):
 
 def save(session, export=False, reporter=None):
     """Save.All (and the reboot an i_cont change needs), then optionally
-    Export.  The caller asks the user first."""
+    Export."""
     return run(session, ('save', 'export') if export else ('save',), reporter)
 
 

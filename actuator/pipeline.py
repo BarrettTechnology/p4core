@@ -1,4 +1,4 @@
-"""Save.All, the last step of a calibration.
+"""Save.All, after each calibration step that passed (steps.Session).
 
 One Save.All (0x1010,1): a burst of Save.Single starved the IWDG on STM32
 firmware before 53536c2.
