@@ -109,7 +109,7 @@ def write_mode(node, mode):
 # (stm32 app/faults.c codes[] and faultHandle()).
 ERROR_CODES = {
     0x6320: 'current sense outside its calibration while regulating',
-    0x7321: 'encoder magnet distance',
+    0x7385: 'encoder magnet distance',
     0x2310: 'current limit active (i2t)',
     0x3210: 'bus over-voltage',
     0x3220: 'bus under-voltage',
@@ -120,13 +120,17 @@ ERROR_CODES = {
     0x8140: 'CAN bus-off',
     0x8130: 'heartbeat consumer timeout',
     0x8482: 'velocity tracking fault',
-    0x8680: 'position tracking fault',
+    0x8611: 'position tracking fault (a warning before 5.0.4)',
+    0x2390: 'magnet demag (reverse id held too long)',
+    0x2391: 'positive id control fault',
+    0x2392: 'hard over-current trip',
+    0x3280: 'bus over-voltage fast trip',
     # Older firmware (before 5.0.4)
     0x8411: 'velocity tracking warning',
     0x8414: 'velocity tracking fault',
     0x8418: 'velocity limit active',
-    0x8611: 'position tracking warning',
     0x8614: 'position tracking fault',
+    0x7321: 'encoder magnet distance',
     0x2311: 'magnet demag (reverse id held too long)',
     0x2312: 'positive id control fault',
     0x2313: 'hard over-current trip',
@@ -134,7 +138,7 @@ ERROR_CODES = {
 }
 
 #: The codes that point at the supply rather than the drive.
-SUPPLY_ERROR_CODES = frozenset((0x3210, 0x3220, 0x2314))
+SUPPLY_ERROR_CODES = frozenset((0x3210, 0x3220, 0x3280, 0x2314))
 
 
 def describe_error(code):
