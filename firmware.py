@@ -58,6 +58,8 @@ FEATURES = collections.OrderedDict([
     ('pwm_periods', Feature((0x3001, 13), 'PWM periods per slot (0x3001,13)')),
     ('heartbeat_consumer', Feature((0x1016, 1), 'the heartbeat consumer (0x1016)')),
     ('legacy_polarity', Feature((0x3013, 3), 'polarity in 0x3013,3 (4.3.x)')),
+    # Came within the 5.0 line: probed there too (ALWAYS_PROBED).
+    ('observer_ff', Feature((0x3013, 15), 'the velocity observer corner and torque ff (0x3013,14-15)')),
     # Derived, not probed: the 5.0.0 units and CSV layout (not legacy).
     ('current_line', Feature(None, 'the 5.0.0 units and configuration layout')),
 ])
@@ -109,6 +111,8 @@ class Firmware(collections.namedtuple('Firmware', 'version text features')):
 
 
 _ATTR = '_p4_firmware'
+#: Probed whatever the version says: not implied by CURRENT_LINE.
+ALWAYS_PROBED = ('legacy_polarity', 'observer_ff')
 
 
 def _probe(node, index, sub):
@@ -139,16 +143,16 @@ def detect(node, refresh=False):
         return fw
     version, text = _version(node)
     if version is not None and version >= CURRENT_LINE:
-        probed = ('legacy_polarity',)
+        probed = ALWAYS_PROBED
     elif version is not None:
         probed = [name for name, f in FEATURES.items() if f.probe is not None]
     else:
-        probed = ('legacy_polarity', 'capture')
+        probed = ALWAYS_PROBED + ('capture',)
     features = frozenset(name for name in probed if _probe(node, *FEATURES[name].probe))
     fw = Firmware(version, text, features)
     if not fw.legacy:
         assumed = (name for name, f in FEATURES.items()
-                   if f.probe is not None and name != 'legacy_polarity')
+                   if f.probe is not None and name not in ALWAYS_PROBED)
         fw = fw._replace(features=features | set(assumed) | {'current_line'})
     try:
         setattr(node, _ATTR, fw)

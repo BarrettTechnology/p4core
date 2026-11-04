@@ -124,11 +124,13 @@ BOARD_CALIBRATION = frozenset(
 
 #: Rows a template carries that older firmware does not have: the Coulomb
 #: friction feed-forward and the settle ki (stm32 e1b0a4e / cfaea4d), and the
-#: drag fit's Tc and B (stm32 898910f).  Loaded
+#: drag fit's Tc and B (stm32 898910f), and the velocity observer's corner and
+#: torque ff (stm32 2e0a661).  Loaded
 #: onto such firmware, the drive's "no such object" is a note, not an error;
 #: exported from it, the template's value (0, off) is kept.
 OPTIONAL_ROWS = frozenset([(0x2381, 3), (0x2381, 4),
-                           (0x3011, 17), (0x3011, 18)])
+                           (0x3011, 17), (0x3011, 18),
+                           (0x3013, 14), (0x3013, 15)])
 #: SDO aborts that mean the object or sub-index does not exist.
 NO_OBJECT_ABORTS = frozenset([0x06020000, 0x06090011])
 

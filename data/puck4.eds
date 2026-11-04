@@ -3070,14 +3070,14 @@ DefaultValue=0
 [3013]
 ParameterName=EncoderConfig
 ObjectType=0x09
-SubNumber=13
+SubNumber=15
 
 [3013sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=13
+DefaultValue=15
 
 [3013sub1]
 ParameterName=Resolution
@@ -3161,6 +3161,20 @@ ParameterName=EncoderFilterInEffect
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
+DefaultValue=0
+
+[3013sube]
+ParameterName=SpeedObserverCorner
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
+DefaultValue=300
+
+[3013subf]
+ParameterName=SpeedObserverTorqueFF
+ObjectType=0x07
+DataType=0x0006
+AccessType=rw
 DefaultValue=0
 
 [3015]
