@@ -116,7 +116,8 @@ ERROR_CODES = {
     0x4210: 'amplifier over-temperature',
     0x8110: 'CAN overrun: the drive fell behind the bus (CPU load -- '
             'PWM/control rate too high for it)',
-    0x8180: 'SYNC timeout',
+    0x8700: 'SYNC timeout',
+    0x8180: 'SYNC timeout (firmware before 5.0.5)',
     0x8140: 'CAN bus-off',
     0x8130: 'heartbeat consumer timeout',
     0x8482: 'velocity tracking fault',
