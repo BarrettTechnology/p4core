@@ -63,7 +63,7 @@ class AutosaveCase(unittest.TestCase):
     def setUp(self):
         self.events = []
         for target, name, new in (
-                (steps.pipeline, 'save_all',
+                (steps.pipeline, 'save_settings',
                  lambda dev: self.events.append('save')),
                 (steps.commission, 'require_isense', lambda dev: None),
                 (steps.commission, 'wait_until_cool',
@@ -173,7 +173,7 @@ class TestASaveThatFails(AutosaveCase):
     def failing_save(self):
         def fail(dev):
             raise OSError('no answer')
-        return mock.patch.object(steps.pipeline, 'save_all', fail)
+        return mock.patch.object(steps.pipeline, 'save_settings', fail)
 
     def test_stops_the_run_and_says_so(self):
         s = self.session(('a', writes), ('b', writes))

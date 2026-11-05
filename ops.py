@@ -12,14 +12,17 @@ are two ways of calling them.
   export_config(session, node_id, template, out)
   set_id(session, old_id, new_id)        NetCfg, reboot, PDO COB-ID remap
   reset(session, node_id)                NMT reset and wait for it
+  wipe_nvm(session, node_id)             erase NV but the bus settings, reload the blank
   calibrate(session, node_id, steps)     p4core.calibrate.calibrate_all
 """
 
+import collections
+import datetime
 import os
 import time
 
 from . import calibrate as _calibrate
-from . import can_backend, config_csv
+from . import can_backend, config_csv, firmware, nvsave
 from . import flash as _flash
 from .reporter import Reporter
 
@@ -178,10 +181,15 @@ def load_config(session, node_id, path, reporter=None, save=True,
                 reboot=True, force=False):
     """Download the config CSV at *path* to *node_id*, then (by default)
     Save.All and reboot, because much of the configuration is latched at
-    boot.  Returns config_csv's ApplyResult; raises config_csv.ConfigError
+    boot.  A save reboots first as well, so that it stores NV and the file, not
+    the PDO map the tools run with.  Returns config_csv's ApplyResult; raises config_csv.ConfigError
     for an invalid file (unless *force*)."""
     reporter = _reporter(reporter)
-    node = session.add_node(node_id)
+    if save:
+        reporter.status('Rebooting...')
+        node = session.reset_node(node_id, reselect=False)
+    else:
+        node = session.add_node(node_id)
     reporter.status('Loading {} into node {}...'.format(
         os.path.basename(path), node_id))
     result = config_csv.load(node, path, node_id, reporter, force=force)
@@ -204,6 +212,106 @@ def export_config(session, node_id, template, output, reporter=None):
     count = config_csv.build_from_template(node, template, output, reporter)
     reporter.note('{} value(s) written to {}'.format(count, output))
     return count
+
+
+# ---------------------------------------------------------------------------
+# Wipe NVM
+# ---------------------------------------------------------------------------
+RESTORE_SIGNATURE = 0x64616F6C     # "load"
+#: What a wipe must leave as it was: product code, serial, node ID.
+WIPE_KEEPS = tuple((0x1018, sub) for sub in range(1, 7)) + ((0x21B0, 0),)
+
+WipeResult = collections.namedtuple('WipeResult', 'backup template loaded ok')
+
+
+def _nv_command(node, index, sub, signature):
+    timeout = node.sdo.RESPONSE_TIMEOUT
+    node.sdo.RESPONSE_TIMEOUT = max(timeout, 1.0)
+    try:
+        node.sdo.download(index, sub, signature.to_bytes(4, 'little'))
+    finally:
+        node.sdo.RESPONSE_TIMEOUT = timeout
+
+
+def default_wipe_backup(node_id):
+    return os.path.join(
+        os.path.expanduser('~'), 'p4-nvm-backups', 'node{}-{}.csv'.format(
+            node_id, datetime.datetime.now().strftime('%Y%m%d-%H%M%S')))
+
+
+def wipe_node(node, reboot, reporter=None, backup=None):
+    """Start *node* over for a new motor: back its configuration up to a
+    CSV, erase every NV row but communication and identity (0x1000-0x1FFF),
+    the node ID and the CAN termination (0x1011,3 and 5), reboot, then load, save
+    and reboot into the model's blank template, without which the drive
+    faults on Gainfactor 0.  *reboot* resets the puck, waits for it and
+    returns its node.  Returns a WipeResult; raises OperationError, with
+    nothing erased, when the firmware lacks 0x1011,5, the drive is enabled,
+    the model has no template or the backup fails.
+
+    The board's calibration goes too, so run Identify and Refine afterwards.
+    The CSV does not hold it, nor the cogging table: a wipe is not undone by
+    loading the backup.
+    """
+    reporter = _reporter(reporter)
+    node_id = node.id
+    fw = firmware.detect(node)
+    if not fw.has('nvm_wipe'):
+        raise OperationError(
+            'firmware {} cannot wipe NVM (no 0x1011,5): update it first'.format(
+                fw.text))
+    if int.from_bytes(node.sdo.upload(0x6041, 0)[:2], 'little') & 0x0004:
+        raise OperationError('node {} is enabled: disable it first'.format(node_id))
+    try:
+        template = config_csv.template_for(node)
+    except ValueError as exc:
+        raise OperationError(str(exc)) from exc
+    before = {key: node.sdo.upload(*key) for key in WIPE_KEEPS}
+
+    backup = backup or default_wipe_backup(node_id)
+    os.makedirs(os.path.dirname(os.path.abspath(backup)), exist_ok=True)
+    reporter.status('Backing node {} up to {}...'.format(node_id, backup))
+    config_csv.build_from_template(node, template, backup, reporter)
+    reporter.note('Backup: ' + backup)
+
+    reporter.status('Erasing NVM...')
+    for sub in (3, 5):                 # device profile, manufacturer
+        _nv_command(node, 0x1011, sub, RESTORE_SIGNATURE)
+        reporter.sleep(1.0)            # STM32 commits from its main loop
+    reporter.status('Rebooting...')
+    node = reboot()
+
+    reporter.status('Loading {}...'.format(os.path.basename(template)))
+    loaded = config_csv.load(node, template, node_id, reporter,
+                             keep=config_csv.application_row)
+    reporter.note('{} value(s) written, {} error(s)'.format(
+        loaded.written, len(loaded.errors)))
+    reporter.status('Saving to NVM...')
+    nvsave.save_settings(node)
+    reporter.sleep(1.0)
+    reporter.status('Rebooting...')
+    node = reboot()
+
+    changed = [key for key, value in before.items()
+               if node.sdo.upload(*key) != value]
+    for index, sub in changed:
+        reporter.warn('0x{:04X},{} changed in the wipe'.format(index, sub))
+    nominal = int.from_bytes(node.sdo.upload(0x3001, 9)[:2], 'little') / 10.0
+    bus = _calibrate.read_bus_v(node)
+    if bus is not None and abs(bus - nominal) > 0.2 * nominal:
+        reporter.warn('Bus is {:.1f} V, the template\'s nominal {:.1f} V: set '
+                      '0x3001,9 before Identify'.format(bus, nominal))
+    reporter.warn('Template currents loaded: write this motor\'s ratings to '
+                  '0x3011,8 and 0x3011,9 before Identify')
+    return WipeResult(backup, template, loaded, loaded.ok and not changed)
+
+
+def wipe_nvm(session, node_id, reporter=None, backup=None):
+    """wipe_node() through a Session: see there."""
+    def reboot():
+        session.reset_node(node_id)
+        return session.add_node(node_id)
+    return wipe_node(session.add_node(node_id), reboot, reporter, backup)
 
 
 # ---------------------------------------------------------------------------

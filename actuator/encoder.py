@@ -412,7 +412,7 @@ def calibrate_runout(dev, skip_k=(), geared=False, steps=RUNOUT_STEPS,
                      dwell_s=RUNOUT_DWELL_S, target_a=None, retest=True,
                      log=None):
     """Measure the runout, upload the bins, retest.  RAM only: the caller
-    saves (0x3027 subs 1 .. last, Save.All).  Returns the report dict:
+    saves (0x3027 subs 1 .. last, Save.App + Save.Mfg).  Returns the report dict:
     ``fit``, ``selection``, ``bins`` (Q8.8), ``filter_model``, ``retest``
     (the compensated sweep's fit and per-bin before/after), ``passed``."""
     log = log or dev._log

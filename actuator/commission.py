@@ -129,9 +129,6 @@ class Limits:
 START_TEMP_C = 60.0
 #: ... and at least this far under max_temp_c, when the user's limit is low.
 TEMP_START_MARGIN_C = 5.0
-#: The switching-heat hold warms the board ~20 C on purpose: it starts
-#: with this much room under max_temp_c (steps._wait_board_cool).
-SWHEAT_START_MARGIN_C = 20.0
 
 
 def start_temp_c(limits):

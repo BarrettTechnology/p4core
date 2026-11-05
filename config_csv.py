@@ -35,6 +35,7 @@ import time
 
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
+from . import nvsave
 from .reporter import Reporter
 
 
@@ -653,15 +654,29 @@ class ConfigError(ValueError):
         self.errors = errors
 
 
-def load(node, path, node_id=None, reporter=None, force=False):
+def application_row(row):
+    """False for a row a wipe keeps: communication and identity
+    (0x1000-0x1FFF), the node ID and the CAN termination."""
+    if row.kind != 'entry':
+        return True
+    try:
+        index = int(row.index, 0)
+    except (TypeError, ValueError):
+        return True
+    return index >= 0x2000 and index not in (0x21B0, 0x21B2)
+
+
+def load(node, path, node_id=None, reporter=None, force=False, keep=None):
     """Validate the CSV at *path* against *node*'s dictionary and apply it.
 
     Raises ConfigError on invalid lines unless *force*.  Returns an
     ApplyResult.  Saving to NVM and rebooting are the caller's (the Session
-    has save_all() and reset_node()).
+    has save_all() and reset_node()).  *keep*, a predicate, limits the rows.
     """
     reporter = reporter or Reporter()
     rows = read(path)
+    if keep is not None:
+        rows = [r for r in rows if keep(r)]
     if node_id is None:
         node_id = node.id
     errors, warnings = validate(rows, node_id, node.object_dictionary)
@@ -868,7 +883,6 @@ PDO_COB_BASES = {
     0x1800: 0x180, 0x1801: 0x280, 0x1802: 0x380, 0x1803: 0x480,   # TPDO1-4
 }
 _PDO_VALID_BIT = 0x80000000    # bit31: 1 = PDO invalid/disabled
-_SAVE_SIGNATURE = 0x65766173   # "save" (CiA-301 0x1010:1)
 
 
 def remap_pdo_cob_ids(node, new_id, old_id=None, save=True, verify=True,
@@ -884,7 +898,8 @@ def remap_pdo_cob_ids(node, new_id, old_id=None, save=True, verify=True,
         needed); a disable->write->enable fallback is kept in case a verify misses on
         other firmware/PDO states.
       * A plain write is RAM-only and reverts on reboot, so an explicit Save
-        (0x1010:1 = "save") IS REQUIRED to commit to NV -- hence save=True default.
+        of communication (nvsave.save_comm) IS REQUIRED to commit to NV -- hence
+        save=True default.
 
     Reads each entry and preserves its high bits, so it self-corrects and tolerates any
     PDO layout. Only remaps PDOs currently keyed to `old_id` (when given), leaving any
@@ -932,9 +947,9 @@ def remap_pdo_cob_ids(node, new_id, old_id=None, save=True, verify=True,
 
     if save:
         try:
-            node.sdo.download(0x1010, 1, _SAVE_SIGNATURE.to_bytes(4, 'little'))   # commit RAM -> NV
+            nvsave.save_comm(node)   # commit RAM -> NV
         except Exception as e:
-            log("  remap save (0x1010:1) FAILED ({}) -- COB-IDs are in RAM only and will "
+            log("  remap save FAILED ({}) -- COB-IDs are in RAM only and will "
                 "revert on reboot".format(e))
             ok = False
     return ok, results

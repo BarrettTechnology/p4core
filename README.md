@@ -20,7 +20,7 @@ Each app is split model / controller / view:
 
 ## Shared commands
 
-`p4core.cli.add_common_commands` gives every app:
+`p4core.cli.add_common_commands` gives every app, and `python -m p4core`:
 
     scan                         node IDs on the bus
     info [--all] [--flashloader] firmware, model, live readings
@@ -31,6 +31,7 @@ Each app is split model / controller / view:
     config templates             the shipped templates
     set-id NEW                   NetCfg, reboot, PDO COB-ID remap
     reset [--all]                NMT reset and wait
+    wipe-nvm [--backup CSV]      erase NV but bus settings, reload the blank template
     calibrate [STEP...]          encoder-test, bias, gain, ezero (motor turns)
 
 with `--can PORT` (default `$P4_CAN` or `can0`), `--id N` (default: the only

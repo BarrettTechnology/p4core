@@ -124,7 +124,7 @@ class FakeSession:
     def add_node(self, node_id):
         return self.node
 
-    def save_all(self, node):
+    def save_settings(self, node):
         self.calls.append('save')
 
     def reset_node(self, node_id):

@@ -14,6 +14,9 @@ dependencies = [
     "numpy>=1.26",
 ]
 
+[project.scripts]
+p4core = "p4core.__main__:main"
+
 [project.optional-dependencies]
 candlelight = ["pyusb>=1.2", "libusb-package>=1.0"]
 # p4core.canbar, the GUIs' shared CAN port bar.

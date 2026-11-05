@@ -1,24 +1,13 @@
-"""Save.All, after each calibration step that passed (steps.Session).
+"""Saving the settings, after each calibration step that passed (steps.Session).
 
-One Save.All (0x1010,1): a burst of Save.Single starved the IWDG on STM32
-firmware before 53536c2.
+One save (nvsave.save_settings): a burst of Save.Single starved the IWDG on
+STM32 firmware before 53536c2.
 """
 
-import struct
+from .. import nvsave
 
 
-SAVE_SIGNATURE = 0x65766173          # "save", CiA 301 0x1010
-OD_SAVE = (0x1010, 1)
-
-
-def save_all(dev):
-    """Every object to NVM (~0.55 s on the drive)."""
-    sdo = dev.node.sdo
-    old = getattr(sdo, 'RESPONSE_TIMEOUT', None)
-    try:
-        if old is not None and old < 2.0:
-            sdo.RESPONSE_TIMEOUT = 2.0
-        sdo.download(OD_SAVE[0], OD_SAVE[1], struct.pack('<I', SAVE_SIGNATURE))
-    finally:
-        if old is not None:
-            sdo.RESPONSE_TIMEOUT = old
+def save_settings(dev):
+    """The drive's settings to NV; the PDOs and the rest of communication stay
+    as NV has them."""
+    nvsave.save_settings(dev.node)

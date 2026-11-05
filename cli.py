@@ -297,6 +297,17 @@ def _cmd_reset(ctx):
         ops.reset(ctx.session, node_id, ctx.reporter)
 
 
+def _cmd_wipe_nvm(ctx):
+    if not ctx.reporter.confirm(
+            'Erase node {}\'s NVM? Only communication and identity, the node '
+            'ID and the CAN termination stay; motor data and board calibration '
+            'go, and the blank template is loaded.'.format(ctx.node_id)):
+        return EXIT_FAILED
+    result = ops.wipe_nvm(ctx.session, ctx.node_id, ctx.reporter,
+                          backup=ctx.args.backup)
+    return EXIT_OK if result.ok else EXIT_FAILED
+
+
 def _cmd_calibrate(ctx):
     steps = ctx.args.steps or None
     unknown = set(steps or ()) - set(CALIBRATION_STEPS)
@@ -320,7 +331,7 @@ CALIBRATION_STEPS = [name for name, _ in _calibrate.STEPS]
 
 
 def add_common_commands(sub, only=None):
-    """Register scan/info/flash/config/set-id/reset/calibrate on *sub*.
+    """Register scan/info/flash/config/set-id/reset/wipe-nvm/calibrate on *sub*.
 
     *only* limits it to the named commands.  Returns {name: subparser} so an
     app can add options to one.
@@ -387,6 +398,15 @@ def add_common_commands(sub, only=None):
             needs_node=True)
     if p:
         p.add_argument('new_id', type=int)
+
+    p = add('wipe-nvm', _cmd_wipe_nvm,
+            'erase NV but communication, identity, node ID and CAN termination, '
+            'for a new motor; loads the blank template',
+            needs_node=True)
+    if p:
+        p.add_argument('--backup', metavar='CSV',
+                       help='where to back the configuration up first (default: '
+                       '~/p4-nvm-backups/node<ID>-<time>.csv)')
 
     add('reset', _cmd_reset, 'NMT-reset a puck and wait for it', all_flag=True)
 

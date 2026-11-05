@@ -421,7 +421,7 @@ def apply(session, node_id, cur, vel=None, pos_kp=None, reporter=None,
     """Write a design to *node_id*: the current gains and effective control
     gain, the velocity gains and the position Kp when given, and the PWM the
     current loop was designed at when it differs (latched at boot, hence
-    the Save.All and reboot)."""
+    the save and reboot)."""
     from .reporter import Reporter
     reporter = reporter if reporter is not None else Reporter()
     node = session.add_node(node_id)
@@ -438,7 +438,7 @@ def apply(session, node_id, cur, vel=None, pos_kp=None, reporter=None,
             reporter.warn('the PWM takes effect at the next boot')
     if save:
         reporter.status('Saving to NVM...')
-        session.save_all(node)
+        session.save_settings(node)
     if reboot:
         reporter.status('Rebooting...')
         session.reset_node(node_id)

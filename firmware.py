@@ -60,6 +60,7 @@ FEATURES = collections.OrderedDict([
     ('legacy_polarity', Feature((0x3013, 3), 'polarity in 0x3013,3 (4.3.x)')),
     # Came within the 5.0 line: probed there too (ALWAYS_PROBED).
     ('observer_ff', Feature((0x3013, 15), 'the velocity observer corner and torque ff (0x3013,14-15)')),
+    ('nvm_wipe', Feature((0x1011, 5), 'restoring manufacturer NV (0x1011,5)')),
     # Derived, not probed: the 5.0.0 units and CSV layout (not legacy).
     ('current_line', Feature(None, 'the 5.0.0 units and configuration layout')),
 ])
@@ -112,7 +113,7 @@ class Firmware(collections.namedtuple('Firmware', 'version text features')):
 
 _ATTR = '_p4_firmware'
 #: Probed whatever the version says: not implied by CURRENT_LINE.
-ALWAYS_PROBED = ('legacy_polarity', 'observer_ff')
+ALWAYS_PROBED = ('legacy_polarity', 'observer_ff', 'nvm_wipe')
 
 
 def _probe(node, index, sub):

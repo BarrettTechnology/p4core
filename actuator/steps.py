@@ -17,7 +17,7 @@ single step can be repeated on its own.
 
 A step's results reach NVM as soon as it passes (or passes with a warning),
 so a later failure or a power cycle cannot lose them: the Session does one
-Save.All after each step that left unsaved values in RAM (Session._autosave).
+Save.App + Save.Mfg after each step that left unsaved values in RAM (Session._autosave).
 Some steps save for themselves:
 
   - The board calibrations (bias, gain, settling, slope, offset fold)
@@ -26,7 +26,7 @@ Some steps save for themselves:
     are saved, and the drive is rebooted.
 
 A failed step saves nothing, but what it wrote may still be in RAM, and
-Save.All takes all of RAM.  So the next run reboots the drive first, which
+Save.App + Save.Mfg stores those ranges as RAM has them.  So the next run reboots the drive first, which
 puts it back on what NVM holds (Session._discard_failed).  The Save step
 remains for values written by hand, and it does the reboot i2t needs.
 
@@ -50,7 +50,7 @@ class StepFailed(SysidError):
 
 
 class _SaveFailed(StepFailed):
-    """The step passed but its Save.All did not: its results are good, and
+    """The step passed but its Save.App + Save.Mfg did not: its results are good, and
     still in RAM."""
 
 
@@ -394,7 +394,7 @@ class Session:
         self._preflight_done = False
 
     def _autosave(self, st):
-        """One Save.All after a step that passed, if it left values in RAM.
+        """One Save.App + Save.Mfg after a step that passed, if it left values in RAM.
         Save and Export are not results to save."""
         if not self.autosave or not self.unsaved or st.key in ('save',
                                                                'export'):
@@ -404,16 +404,16 @@ class Session:
                            'failed step\'s values -- reboot the drive')
             return
         try:
-            pipeline.save_all(self.dev)
+            pipeline.save_settings(self.dev)
         except Exception as exc:
-            raise _SaveFailed('passed, but Save.All failed, so the results '
+            raise _SaveFailed('passed, but Save.App + Save.Mfg failed, so the results '
                               'are only in RAM: {}'.format(exc)) from exc
         self.unsaved = False
-        self.log('{}: saved to NV (Save.All)'.format(st.title))
+        self.log('{}: saved to NV (Save.App + Save.Mfg)'.format(st.title))
 
     def _discard_failed(self):
         """Back on what NVM holds after a failed step, so that this run's
-        Save.All cannot store what it left in RAM.  Everything that passed
+        Save.App + Save.Mfg cannot store what it left in RAM.  Everything that passed
         before it is already saved."""
         if not self._failed_in_ram or self.reboot is None:
             return
@@ -851,19 +851,19 @@ def _r_cogging(s):
 
 
 def _r_save(s):
-    """Save.All; and a reboot when i_cont/i_peak changed, since i2t takes
+    """Save.App + Save.Mfg; and a reboot when i_cont/i_peak changed, since i2t takes
     them only at boot."""
-    pipeline.save_all(s.dev)
+    pipeline.save_settings(s.dev)
     s.unsaved = False
     if not s.ctx.get('i2t_changed'):
-        return 'Save.All done'
+        return 'Save.App + Save.Mfg done'
     if s.reboot is None:
         s.rep.check('i2t', False, 'i_cont/i_peak changed: i2t takes them at '
                     'boot -- reboot the drive')
-        return 'Save.All done; reboot for i2t'
+        return 'Save.App + Save.Mfg done; reboot for i2t'
     s._reboot()
     s.ctx['i2t_changed'] = False
-    return 'Save.All done, rebooted (i2t takes i_cont/i_peak at boot)'
+    return 'Save.App + Save.Mfg done, rebooted (i2t takes i_cont/i_peak at boot)'
 
 
 def _r_export(s):
@@ -918,7 +918,7 @@ STEPS = (
          _r_winding),
     Step('runout', 'Encoder', 'Encoder runout table', _p_runout, _r_runout),
     Step('cogging', 'Tune', 'Cogging feed-forward', _p_cogging, _r_cogging),
-    Step('save', 'Save', 'Save to NV (Save.All)', _p_save, _r_save),
+    Step('save', 'Save', 'Save to NV (Save.App + Save.Mfg)', _p_save, _r_save),
     Step('export', 'Save', 'Export config CSV', _p_export, _r_export),
 )
 STEP_KEYS = tuple(st.key for st in STEPS)

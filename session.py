@@ -20,7 +20,8 @@ import time
 import can
 import canopen
 
-from . import can_backend, paths
+from . import can_backend, nvsave, paths
+from .pdo_defaults import apply_default_pdos
 
 class KernelPeriodicTask:
     """Adapts socketcan's kernel cyclic task to the interface canopen expects.
@@ -238,8 +239,7 @@ class P4Network(canopen.Network):
 
 
 
-#: CiA-301 0x1010 "save" signature.
-SAVE_SIGNATURE = 0x65766173
+from .nvsave import SAVE_SIGNATURE  # noqa: E402,F401  (re-exported)
 
 
 class Session:
@@ -448,13 +448,12 @@ class Session:
         """Make *node_id* the selected node, configured for control, and
         return it.
 
-        EDS attached, PDO configuration read back from the device, heartbeat
+        EDS attached, the default PDO mapping written (pdo_defaults), heartbeat
         off, OPERATIONAL, and the drive's gear ratio and peak velocity read.
         """
         node = self.add_node(node_id)
         self.node = node
-        node.tpdo.read()
-        node.rpdo.read()
+        apply_default_pdos(node)
         node.sdo['HeartbeatPeriod'].raw = 0
 
         # Selecting a node NMT-resets it (see reset_node).  A puck that comes
@@ -513,13 +512,15 @@ class Session:
         The reset boots the flashloader, which answers SDO itself, and the
         application follows after BOOT_S.  When the node was the selected one
         (or *reselect* is True) it is selected again — the node object is
-        reused, but the PDO maps are read back, so callers that registered
-        TPDO callbacks must register them again.  Returns the node.
+        reused, but the PDO maps are written again, so callers that registered
+        TPDO callbacks must register them again.  Otherwise the reset drops the
+        default PDO mapping until the node is configured again.  Returns the node.
         """
         if node_id is None:
             node_id = self.require_node().id
         if reselect is None:
             reselect = self.node is not None and self.node.id == node_id
+        self._multi_ready.discard(node_id)
         self.send_nmt(0x81, node_id)
         sleep(self.BOOT_S)
         deadline = time.monotonic() + self.REBOOT_TIMEOUT_S
@@ -538,14 +539,14 @@ class Session:
                 sleep(0.5)
 
     def save_all(self, node=None):
-        """Save every object to NVM (0x1010,1 'save'; takes ~0.55 s)."""
-        node = node or self.require_node()
-        timeout = node.sdo.RESPONSE_TIMEOUT
-        node.sdo.RESPONSE_TIMEOUT = max(timeout, 1.0)
-        try:
-            node.sdo.download(0x1010, 1, SAVE_SIGNATURE.to_bytes(4, 'little'))
-        finally:
-            node.sdo.RESPONSE_TIMEOUT = timeout
+        """Save every object to NVM (takes ~0.55 s): for a config CSV.  It stores
+        the tools' PDO map too, so anything else uses save_settings()."""
+        nvsave.save_all(node or self.require_node())
+
+    def save_settings(self, node=None):
+        """Save the drive's settings to NVM, leaving communication (the PDOs)
+        as NV has them (nvsave)."""
+        nvsave.save_settings(node or self.require_node())
 
     def save_single(self, index, sub, node=None):
         """Save one object to NVM (Save.Single takes (index << 8) | sub)."""
@@ -567,8 +568,8 @@ class Session:
     def configure_extra_node(self, node_id):
         """Configure *node_id* for group control and return its node object.
 
-        The same setup select_node() gives the selected node — EDS, PDO
-        configuration read back from the device, heartbeat off, OPERATIONAL —
+        The same setup select_node() gives the selected node — EDS, the default
+        PDO mapping, heartbeat off, OPERATIONAL —
         minus becoming self.node and minus the scaling read (commands are
         scaled once, by the selected node's gear ratio; a multi-puck group is
         assumed homogeneous).  Idempotent: a node already configured is
@@ -577,8 +578,7 @@ class Session:
         if node_id in self.network and node_id in self._multi_ready:
             return self.network[node_id]
         node = self.add_node(node_id)
-        node.tpdo.read()
-        node.rpdo.read()
+        apply_default_pdos(node)
         node.sdo['HeartbeatPeriod'].raw = 0
         # See select_node() for why the node is started explicitly.
         node.nmt.state = 'OPERATIONAL'
@@ -588,7 +588,7 @@ class Session:
     def prepare_multi(self):
         """Configure every puck the last scan found; return their nodes.
 
-        PDO read-back is a few dozen SDO transfers per node, so a GUI calls
+        The PDO mapping is about a hundred SDO transfers per node, so a GUI calls
         this off its UI thread.
         """
         return [self.configure_extra_node(node_id)
