@@ -55,7 +55,7 @@ from p4core.calibrate import (read_kt, has_rated_units, permille_base_ma, workin
                                rated_torque_mnm as read_rated_torque_mnm)
 from p4core import cia402
 
-from . import dragfit, fits, winding
+from . import dragfit, encfilter, fits, winding
 from .pdo_layout import PdoLayout
 from .constants import PWM_PATTERNS_PER_CONTROL_CYCLE, THETA_E_PER_ELEC_REV
 #: A winding reading outside this range is no sensor, not a temperature: an
@@ -1580,8 +1580,9 @@ class P4Drive:
         """The drive's own voltage limit and which budget produced it.
 
         Returns None on firmware without the 0x3016 telemetry.  *one_sided*
-        is True for the K64 budget (fits.budget_is_one_sided); a host choosing
-        a PWM rate for this drive passes it to fits.choose_rates.
+        is True for the K64 budget (the product code's MCU, else
+        fits.budget_is_one_sided); a host choosing a PWM rate for this drive
+        passes it to fits.choose_rates.
         """
         try:
             tel = self._isense_telemetry()
@@ -1590,9 +1591,17 @@ class P4Drive:
         if tel['max_width'] <= 0:
             return None
         t = self.pwm_timing_ns()
-        one_sided = fits.budget_is_one_sided(
-            tel['max_width'], tel['period'], tel['pwm_hz'], t['dead_time_ns'],
-            t['prop_delay_ns'], t['settling_ns'], t['sampling_ns'])
+        # The product code names the MCU; the width heuristic is only for a
+        # model it does not know.  The two budgets differ by well under 1 %
+        # at 20 kHz, so the heuristic took an STM32 P4-42 for a K64 there.
+        mcu = encfilter.mcu_of(self.node)
+        if mcu:
+            one_sided = mcu == 'K64'
+        else:
+            one_sided = fits.budget_is_one_sided(
+                tel['max_width'], tel['period'], tel['pwm_hz'],
+                t['dead_time_ns'], t['prop_delay_ns'], t['settling_ns'],
+                t['sampling_ns'])
         # The K64 shifts its pulses past the reported width (k64/hal.c
         # shift_width): the limit it runs is that one.
         gap = (2.0 * t['dead_time_ns'] * 1e-9 / tel['tick_s'] + 2.0

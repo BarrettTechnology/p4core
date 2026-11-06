@@ -91,6 +91,10 @@ SPREAD_MARGIN = 2.0
 MODEL_ENCODER = {'P4-16': 'MA782', 'P4-32': 'MA736', 'P4-37': 'MA702',
                  'P4-42': 'MA736'}
 
+#: MCU family per model (the board owner, 2026-10-14): P4-16/P4-37 are K64,
+#: P4-32/P4-42 are STM32.
+MODEL_MCU = {'P4-16': 'K64', 'P4-32': 'STM32', 'P4-37': 'K64', 'P4-42': 'STM32'}
+
 
 def _ma782_settings():
     # FW: rest range, sd (counts of 0x3012,1, 400 samples) -- bench 2026-10-09
@@ -230,6 +234,16 @@ def tracking_model(encoder, value, models):
 
 def read_product_code(node):
     return struct.unpack('<I', bytes(node.sdo.upload(*OD_PRODUCT)[:4]))[0]
+
+
+def mcu_of(node):
+    """The node's MCU family (MODEL_MCU) from its product code, or None
+    (unknown model, or no 0x1018,2 to read)."""
+    try:
+        model, _ = encoder_for(read_product_code(node))
+    except Exception:
+        return None
+    return MODEL_MCU.get(model)
 
 
 def refine_encoder(enc, running):

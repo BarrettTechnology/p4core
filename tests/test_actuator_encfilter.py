@@ -112,6 +112,43 @@ class TestLive(unittest.TestCase):
         self.assertEqual(n.sdo.saved, [0x301306])
 
 
+class TestMcu(unittest.TestCase):
+    def test_from_product_code(self):
+        self.assertEqual(encfilter.mcu_of(Node(5707, 0)), 'K64')
+        self.assertEqual(encfilter.mcu_of(Node(5755, 0)), 'STM32')
+        self.assertIsNone(encfilter.mcu_of(Node(1, 0)))
+
+    def test_no_product_code(self):
+        n = Node(5755, 0)
+        del n.sdo.od[(0x1018, 2)]
+        self.assertIsNone(encfilter.mcu_of(n))
+
+    def test_budget_takes_the_mcu_over_the_width(self):
+        # Node 4 (P4-42, STM32) at 20 kHz, 2026-11-06: its width is nearer
+        # the one-sided prediction, which took it for a K64.
+        from p4core.actuator.device import P4Drive
+        reg = {(0x3016, 1): 784, (0x3016, 2): 784, (0x3016, 3): 108,
+               (0x3016, 4): 3881, (0x3016, 5): 3999, (0x3016, 11): 1999,
+               (0x3001, 1): 20000, (0x3001, 2): 250, (0x3001, 3): 180,
+               (0x3001, 5): 250, (0x3001, 6): 613, (0x3001, 7): 313}
+
+        class _Var:
+            def __init__(self, v):
+                self.raw = v
+
+        class _Od(_Sdo):
+            def __getitem__(self, index):
+                return {sub: _Var(v) for (i, sub), v in reg.items()
+                        if i == index}
+
+        for code, one_sided in ((5755, False), (5707, True), (1, True)):
+            n = Node(code, 0)
+            n.sdo = _Od(n.sdo.od)
+            d = P4Drive.__new__(P4Drive)
+            d.node = n
+            self.assertIs(d.voltage_budget()['one_sided'], one_sided, code)
+
+
 class TestChoice(unittest.TestCase):
     def test_ma782_is_fw7(self):
         k, why = encfilter.choose('MA782')
