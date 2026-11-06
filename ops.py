@@ -282,7 +282,8 @@ def wipe_node(node, reboot, reporter=None, backup=None, template=True,
     faults on Gainfactor 0.  *reboot* resets the puck, waits for it and
     returns its node.  Returns a WipeResult; raises OperationError, with
     nothing erased, when the firmware lacks 0x1011,5, the drive is enabled,
-    the model has no template or the backup fails.
+    the model has no template (and *template* is asked for) or the backup
+    fails.  Without a template the backup is an NV JSON (nvjson.save).
 
     *template* False leaves the blank template out, for a caller that loads
     its own CSV next (the drive cannot be enabled until it has).  *legacy*
@@ -309,14 +310,20 @@ def wipe_node(node, reboot, reporter=None, backup=None, template=True,
         try:
             blank = config_csv.template_for(node)     # the backup's layout too
         except ValueError as exc:
-            raise OperationError(str(exc)) from exc
+            # Only the template load needs one: without it the backup is
+            # an NV JSON, as on 4.3.x.
+            if template:
+                raise OperationError('{}: nothing erased'.format(exc)) from exc
     template = blank if template else None
     before = {key: node.sdo.upload(*key) for key in WIPE_KEEPS}
 
-    backup = backup or default_wipe_backup(node_id, '.json' if by_defaults else '.csv')
+    as_json = blank is None
+    if backup and as_json and not backup.endswith('.json'):
+        backup = os.path.splitext(backup)[0] + '.json'
+    backup = backup or default_wipe_backup(node_id, '.json' if as_json else '.csv')
     os.makedirs(os.path.dirname(os.path.abspath(backup)), exist_ok=True)
     reporter.status('Backing node {} up to {}...'.format(node_id, backup))
-    if by_defaults:
+    if as_json:
         nvjson.save(node, backup)
     else:
         config_csv.build_from_template(node, blank, backup, reporter)

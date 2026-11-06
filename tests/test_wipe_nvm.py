@@ -161,6 +161,29 @@ class Wipe(unittest.TestCase):
         self.assertTrue(any('load the configuration CSV' in t
                             for t in self.reporter.texts('warn')))
 
+    def test_no_template_and_none_shipped_backs_up_as_json(self):
+        def none(node):
+            raise ValueError('no config template')
+        config_csv.template_for = none
+        saved = ops.nvjson.save
+        paths = []
+
+        def save(node, path):
+            paths.append(path)
+            with open(path, 'w') as f:
+                f.write('{}')
+        ops.nvjson.save = save
+        try:
+            result = ops.wipe_node(self.node, self.reboot, self.reporter, self.backup,
+                                   template=False)
+        finally:
+            ops.nvjson.save = saved
+        json_backup = self.backup[:-4] + '.json'
+        self.assertEqual(paths, [json_backup])
+        self.assertEqual(result.backup, json_backup)
+        self.assertEqual(self.node.values[(0x1011, 5)], 0x64616F6C)     # erased
+        self.assertEqual(self.loaded, [])
+
     def test_legacy_refused_unless_asked(self):
         firmware.detect = lambda n: firmware.Firmware((4, 3, 5), '4.3.5', frozenset())
         self._refuses('update')
