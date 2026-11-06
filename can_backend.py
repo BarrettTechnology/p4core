@@ -104,6 +104,11 @@ def list_can_interfaces():
     return names
 
 
+#: reset_can.sh's 1M/5M timing: sample points and SJW (in tq of a 160 MHz clock).
+_FD_TIMING = ('sample-point', '0.687', 'sjw', '50',
+              'dsample-point', '0.687', 'dsjw', '10')
+
+
 def bring_iface_up(can_device, bitrate=1_000_000, data_bitrate=5_000_000):
     """BEST-EFFORT bring-up of a SocketCAN interface via `ip link`, no sudo.
 
@@ -131,12 +136,20 @@ def bring_iface_up(can_device, bitrate=1_000_000, data_bitrate=5_000_000):
 
     try:
         _ip(['set', can_device, 'down'], check=False)
-        # CAN-FD first; fall back to classic 1 Mbit for adapters without FD.
-        try:
-            _ip(['set', can_device, 'type', 'can', 'bitrate', str(bitrate),
-                 'fd', 'on', 'dbitrate', str(data_bitrate)])
-        except subprocess.CalledProcessError:
-            _ip(['set', can_device, 'type', 'can', 'bitrate', str(bitrate)])
+        # CAN-FD with the bench timing (68.7 % sample points, SJW sized for the
+        # CANable's 160 MHz clock; 1M/5M only), then CAN-FD on the kernel's
+        # default timing, then classic for adapters without FD.
+        fd = ['bitrate', str(bitrate), 'dbitrate', str(data_bitrate), 'fd', 'on']
+        tries = [fd, ['bitrate', str(bitrate)]]
+        if (bitrate, data_bitrate) == (1_000_000, 5_000_000):
+            tries.insert(0, fd[:4] + list(_FD_TIMING) + fd[4:])
+        for i, opts in enumerate(tries):
+            try:
+                _ip(['set', can_device, 'type', 'can'] + opts)
+                break
+            except subprocess.CalledProcessError:
+                if i == len(tries) - 1:
+                    raise
         # restart-ms is best-effort: gs_usb / CANable rejects it ("Device
         # doesn't support restart from Bus Off"), which must not fail bring-up.
         _ip(['set', can_device, 'type', 'can', 'restart-ms', '100'], check=False)
