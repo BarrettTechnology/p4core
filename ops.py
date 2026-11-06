@@ -13,6 +13,8 @@ are two ways of calling them.
   set_id(session, old_id, new_id)        NetCfg, reboot, PDO COB-ID remap
   reset(session, node_id)                NMT reset and wait for it
   wipe_nvm(session, node_id)             erase NV but the bus settings, reload the blank
+  version(session, node_id)              firmware version and githash
+  nv_save / nv_restore(session, node_id, path)   NV as JSON (p4core.nvjson)
   calibrate(session, node_id, steps)     p4core.calibrate.calibrate_all
 """
 
@@ -22,7 +24,7 @@ import os
 import time
 
 from . import calibrate as _calibrate
-from . import can_backend, config_csv, firmware, nvsave
+from . import can_backend, config_csv, firmware, nvjson, nvsave
 from . import flash as _flash
 from .reporter import Reporter
 
@@ -80,6 +82,7 @@ def info(session, node_id, flashloader=False, reporter=None):
     result = dict(
         node_id=node_id,
         firmware=firmware,
+        githash=nvjson.read_githash(node),
         product_code=product,
         model=can_backend.model_from_product_code(product)
         if product is not None else None,
@@ -104,7 +107,8 @@ def format_info(result):
     def show(value, fmt='{}'):
         return 'unknown' if value is None else fmt.format(value)
     lines = ['Node {}'.format(result['node_id']),
-             '  Firmware:     {}'.format(show(result['firmware']))]
+             '  Firmware:     {}'.format(show(result['firmware'])),
+             '  Githash:      {}'.format(result.get('githash') or 'n/a')]
     if 'flashloader' in result and result['flashloader'] is not None:
         lines.append('  Flashloader:  {}'.format(result['flashloader']))
     lines += [
@@ -118,6 +122,36 @@ def format_info(result):
         '  Temperature:  {}'.format(show(result['temperature_c'], '{} C')),
     ]
     return lines
+
+
+def version(session, node_id):
+    """{'node_id', 'firmware', 'githash'}: 0x100A and 0x3003 (None on 4.3.x),
+    nothing else read and no reboot."""
+    node = session.add_node(node_id)
+    firmware.forget(node)
+    return dict(node_id=node_id, **nvjson.identity(node))
+
+
+def nv_save(session, node_id, path, reporter=None):
+    """Every NV row of *node_id* to the JSON file *path* (p4core.nvjson)."""
+    node = session.add_node(node_id)
+    firmware.forget(node)
+    return nvjson.save(node, path, _reporter(reporter))
+
+
+def nv_restore(session, node_id, path, reporter=None, force=False):
+    """*path* (nv_save) back to *node_id*: write, Save.All, reboot, verify.
+    Returns dict(written, failed, differ)."""
+    node = session.add_node(node_id)
+    firmware.forget(node)
+
+    def reboot():
+        session.reset_node(node_id)
+        return session.add_node(node_id)
+    try:
+        return nvjson.restore(node, path, reboot, _reporter(reporter), force=force)
+    except nvjson.NvError as exc:
+        raise OperationError(str(exc)) from exc
 
 
 def _wait_for_application(session, node_id, reporter, timeout=None):
@@ -233,13 +267,14 @@ def _nv_command(node, index, sub, signature):
         node.sdo.RESPONSE_TIMEOUT = timeout
 
 
-def default_wipe_backup(node_id):
+def default_wipe_backup(node_id, ext='.csv'):
     return os.path.join(
-        os.path.expanduser('~'), 'p4-nvm-backups', 'node{}-{}.csv'.format(
-            node_id, datetime.datetime.now().strftime('%Y%m%d-%H%M%S')))
+        os.path.expanduser('~'), 'p4-nvm-backups', 'node{}-{}{}'.format(
+            node_id, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'), ext))
 
 
-def wipe_node(node, reboot, reporter=None, backup=None):
+def wipe_node(node, reboot, reporter=None, backup=None, template=True,
+              legacy=False):
     """Start *node* over for a new motor: back its configuration up to a
     CSV, erase every NV row but communication and identity (0x1000-0x1FFF),
     the node ID and the CAN termination (0x1011,3 and 5), reboot, then load, save
@@ -249,6 +284,12 @@ def wipe_node(node, reboot, reporter=None, backup=None):
     nothing erased, when the firmware lacks 0x1011,5, the drive is enabled,
     the model has no template or the backup fails.
 
+    *template* False leaves the blank template out, for a caller that loads
+    its own CSV next (the drive cannot be enabled until it has).  *legacy*
+    lets 4.3.x, which has no 0x1011,5, through: there the rows are written
+    their defaults instead (nvjson.legacy_wipe), the backup is an NV JSON
+    (nvjson.save) and no template is loaded (the templates are 5.0's).
+
     The board's calibration goes too, so run Identify and Refine afterwards.
     The CSV does not hold it, nor the cogging table: a wipe is not undone by
     loading the backup.
@@ -256,62 +297,85 @@ def wipe_node(node, reboot, reporter=None, backup=None):
     reporter = _reporter(reporter)
     node_id = node.id
     fw = firmware.detect(node)
-    if not fw.has('nvm_wipe'):
+    by_defaults = legacy and fw.legacy and not fw.has('nvm_wipe')
+    if not fw.has('nvm_wipe') and not by_defaults:
         raise OperationError(
             'firmware {} cannot wipe NVM (no 0x1011,5): update it first'.format(
                 fw.text))
     if int.from_bytes(node.sdo.upload(0x6041, 0)[:2], 'little') & 0x0004:
         raise OperationError('node {} is enabled: disable it first'.format(node_id))
-    try:
-        template = config_csv.template_for(node)
-    except ValueError as exc:
-        raise OperationError(str(exc)) from exc
+    blank = None
+    if not by_defaults:
+        try:
+            blank = config_csv.template_for(node)     # the backup's layout too
+        except ValueError as exc:
+            raise OperationError(str(exc)) from exc
+    template = blank if template else None
     before = {key: node.sdo.upload(*key) for key in WIPE_KEEPS}
 
-    backup = backup or default_wipe_backup(node_id)
+    backup = backup or default_wipe_backup(node_id, '.json' if by_defaults else '.csv')
     os.makedirs(os.path.dirname(os.path.abspath(backup)), exist_ok=True)
     reporter.status('Backing node {} up to {}...'.format(node_id, backup))
-    config_csv.build_from_template(node, template, backup, reporter)
+    if by_defaults:
+        nvjson.save(node, backup)
+    else:
+        config_csv.build_from_template(node, blank, backup, reporter)
     reporter.note('Backup: ' + backup)
 
-    reporter.status('Erasing NVM...')
-    for sub in (3, 5):                 # device profile, manufacturer
-        _nv_command(node, 0x1011, sub, RESTORE_SIGNATURE)
-        reporter.sleep(1.0)            # STM32 commits from its main loop
-    reporter.status('Rebooting...')
-    node = reboot()
+    if by_defaults:
+        reporter.status('Erasing NVM (4.3.x: writing the defaults)...')
+        wiped = nvjson.legacy_wipe(node, reboot, reporter)
+        node = wiped['node']
+        erased_ok = not wiped['failed']
+    else:
+        reporter.status('Erasing NVM...')
+        for sub in (3, 5):                 # device profile, manufacturer
+            _nv_command(node, 0x1011, sub, RESTORE_SIGNATURE)
+            reporter.sleep(1.0)            # STM32 commits from its main loop
+        reporter.status('Rebooting...')
+        node = reboot()
+        erased_ok = True
 
-    reporter.status('Loading {}...'.format(os.path.basename(template)))
-    loaded = config_csv.load(node, template, node_id, reporter,
-                             keep=config_csv.application_row)
-    reporter.note('{} value(s) written, {} error(s)'.format(
-        loaded.written, len(loaded.errors)))
-    reporter.status('Saving to NVM...')
-    nvsave.save_settings(node)
-    reporter.sleep(1.0)
-    reporter.status('Rebooting...')
-    node = reboot()
+    loaded = None
+    if template:
+        reporter.status('Loading {}...'.format(os.path.basename(template)))
+        loaded = config_csv.load(node, template, node_id, reporter,
+                                 keep=config_csv.application_row)
+        reporter.note('{} value(s) written, {} error(s)'.format(
+            loaded.written, len(loaded.errors)))
+        reporter.status('Saving to NVM...')
+        nvsave.save_settings(node)
+        reporter.sleep(1.0)
+        reporter.status('Rebooting...')
+        node = reboot()
 
     changed = [key for key, value in before.items()
                if node.sdo.upload(*key) != value]
     for index, sub in changed:
         reporter.warn('0x{:04X},{} changed in the wipe'.format(index, sub))
-    nominal = int.from_bytes(node.sdo.upload(0x3001, 9)[:2], 'little') / 10.0
-    bus = _calibrate.read_bus_v(node)
-    if bus is not None and abs(bus - nominal) > 0.2 * nominal:
-        reporter.warn('Bus is {:.1f} V, the template\'s nominal {:.1f} V: set '
-                      '0x3001,9 before Identify'.format(bus, nominal))
-    reporter.warn('Template currents loaded: write this motor\'s ratings to '
-                  '0x3011,8 and 0x3011,9 before Identify')
-    return WipeResult(backup, template, loaded, loaded.ok and not changed)
+    if template:
+        nominal = int.from_bytes(node.sdo.upload(0x3001, 9)[:2], 'little') / 10.0
+        bus = _calibrate.read_bus_v(node)
+        if bus is not None and abs(bus - nominal) > 0.2 * nominal:
+            reporter.warn('Bus is {:.1f} V, the template\'s nominal {:.1f} V: set '
+                          '0x3001,9 before Identify'.format(bus, nominal))
+        reporter.warn('Template currents loaded: write this motor\'s ratings to '
+                      '0x3011,8 and 0x3011,9 before Identify')
+    else:
+        reporter.warn('No template loaded: load the configuration CSV next; '
+                      'the drive cannot be enabled until it is')
+    ok = erased_ok and (loaded is None or loaded.ok) and not changed
+    return WipeResult(backup, template, loaded, ok)
 
 
-def wipe_nvm(session, node_id, reporter=None, backup=None):
+def wipe_nvm(session, node_id, reporter=None, backup=None, template=True,
+             legacy=False):
     """wipe_node() through a Session: see there."""
     def reboot():
         session.reset_node(node_id)
         return session.add_node(node_id)
-    return wipe_node(session.add_node(node_id), reboot, reporter, backup)
+    return wipe_node(session.add_node(node_id), reboot, reporter, backup,
+                     template=template, legacy=legacy)
 
 
 # ---------------------------------------------------------------------------

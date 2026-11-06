@@ -358,6 +358,12 @@ class TestCalibrateMenuSettings(unittest.TestCase):
         self.assertEqual(puck.get('Motor', 'ud'), 0)
         self.assertEqual(puck.get('ControlWord'), 0x80)
 
+    def test_deenergise_shuts_down(self):
+        # 4.3.x stays Operation Enabled in IDLE without it.
+        puck = SimPuck()
+        calibrate.deenergise(puck, settle_s=0)
+        self.assertEqual(puck.get('ControlWord'), 0x06)
+
 
 class TestUserDirection(unittest.TestCase):
     """0x607E (DS402) on current firmware, 0x3013,3 on older firmware."""
@@ -511,6 +517,28 @@ class TestCli(unittest.TestCase):
         tmpl = paths.template('P4-42-Blank.csv')
         self.assertEqual(cli.main(self.parser(), ['-q', 'config', 'check', tmpl],
                                   session_factory=None), cli.EXIT_OK)
+
+    def test_config_check_against_another_eds(self):
+        # A 5.0 template against the 4.3.5 EDS: rows 4.3.5 lacks warn.
+        tmpl = paths.template('P4-42-Blank.csv')
+        rep = RecordingReporter()
+        args = self.parser().parse_args(['config', 'check', tmpl, '--eds',
+                                         paths.data('puck4-4.3.5.eds')])
+        ctx = cli.Context(args, rep)
+        self.assertEqual(cli._cmd_config_check(ctx), cli.EXIT_OK)
+        self.assertTrue(any('not found in EDS' in t for t in rep.texts('note')))
+
+    def test_ab_command_names(self):
+        a = self.parser().parse_args(['nv', 'restore', 'f.json', '--force'])
+        self.assertEqual((a.file, a.force), ('f.json', True))
+        a = self.parser().parse_args(['wipe-nvm', '--no-template'])
+        self.assertTrue(a.no_template)
+        a = self.parser().parse_args(['version', '--all'])
+        self.assertTrue(a.all)
+        self.assertEqual(cli._calibration_steps(['ab', 'encoder-offset']),
+                         ['bias', 'gain', 'ezero'])
+        self.assertEqual(cli._calibration_steps(['offsets', 'gainfactor']),
+                         ['bias', 'gain'])
 
     def test_calibrate_rejects_unknown_step(self):
         session = FakeSession([TestOps().puck(5)])

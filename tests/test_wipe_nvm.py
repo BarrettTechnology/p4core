@@ -150,6 +150,49 @@ class Wipe(unittest.TestCase):
         self.wipe()
         self.assertTrue(any('0x3001,9' in t for t in self.reporter.texts('warn')))
 
+    def test_no_template_skips_the_load(self):
+        result = ops.wipe_node(self.node, self.reboot, self.reporter, self.backup,
+                               template=False)
+        self.assertEqual(self.loaded, [])
+        self.assertEqual(self.reboots, 1)
+        self.assertIsNone(result.template)
+        self.assertTrue(result.ok)
+        self.assertTrue(os.path.exists(self.backup))       # still backed up
+        self.assertTrue(any('load the configuration CSV' in t
+                            for t in self.reporter.texts('warn')))
+
+    def test_legacy_refused_unless_asked(self):
+        firmware.detect = lambda n: firmware.Firmware((4, 3, 5), '4.3.5', frozenset())
+        self._refuses('update')
+
+    def test_legacy_writes_defaults_and_backs_up_as_json(self):
+        firmware.detect = lambda n: firmware.Firmware((4, 3, 5), '4.3.5', frozenset())
+        calls = []
+        saved = ops.nvjson.save, ops.nvjson.legacy_wipe
+
+        def save(node, path):
+            calls.append(('save', path))
+            with open(path, 'w') as f:
+                f.write('{}')
+
+        def legacy_wipe(node, reboot, reporter):
+            calls.append('wipe')
+            return dict(written=98, failed=[], differ=[], node=reboot())
+        ops.nvjson.save, ops.nvjson.legacy_wipe = save, legacy_wipe
+        try:
+            result = ops.wipe_node(self.node, self.reboot, self.reporter,
+                                   os.path.join(self.dir.name, 'n3.json'),
+                                   legacy=True)
+        finally:
+            ops.nvjson.save, ops.nvjson.legacy_wipe = saved
+        self.assertEqual([c if c == 'wipe' else c[0] for c in calls], ['save', 'wipe'])
+        self.assertEqual(self.loaded, [])           # no 5.0 template on 4.3.x
+        self.assertNotIn((0x1011, 5), [w[:2] for w in self.node.writes])
+        self.assertTrue(result.ok)
+
+    def test_legacy_backup_defaults_to_json(self):
+        self.assertTrue(ops.default_wipe_backup(3, '.json').endswith('.json'))
+
 
 class ApplicationRow(unittest.TestCase):
     def row(self, index, kind='entry'):

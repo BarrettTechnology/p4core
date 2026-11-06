@@ -244,6 +244,32 @@ def _cmd_info(ctx):
     ctx.emit(results if ctx.args.all else results[0], lines)
 
 
+def _cmd_version(ctx):
+    results = [ops.version(ctx.session, n) for n in targets(ctx)]
+    lines = ['{}{} {}'.format('node {}: '.format(r['node_id']) if ctx.args.all else '',
+                              r['firmware'], r['githash'] or 'n/a')
+             for r in results]
+    ctx.emit(results if ctx.args.all else results[0], lines)
+
+
+def _cmd_nv_save(ctx):
+    doc = ops.nv_save(ctx.session, ctx.node_id, ctx.args.file, ctx.reporter)
+    ctx.emit(dict(file=ctx.args.file, entries=len(doc['entries']),
+                  firmware=doc['firmware'], githash=doc['githash']), [])
+
+
+def _cmd_nv_restore(ctx):
+    if not ctx.reporter.confirm(
+            'Write {} to node {}\'s NV and reboot it?'.format(
+                ctx.args.file, ctx.node_id), default=True):
+        return EXIT_FAILED
+    r = ops.nv_restore(ctx.session, ctx.node_id, ctx.args.file, ctx.reporter,
+                       force=ctx.args.force)
+    ctx.emit(dict(written=r['written'], failed=[k for k, _ in r['failed']],
+                  differ=r['differ']), [])
+    return EXIT_FAILED if r['differ'] else EXIT_OK
+
+
 def _cmd_flash(ctx):
     for node_id in targets(ctx):
         ops.flash(ctx.session, node_id, ctx.args.firmware, ctx.reporter)
@@ -270,7 +296,11 @@ def _cmd_config_export(ctx):
 
 def _cmd_config_check(ctx):
     rows = config_csv.read(ctx.args.csv)
-    errors, warnings = config_csv.validate(rows, ctx.args.node_id or 1)
+    od = None
+    if ctx.args.eds:
+        import canopen
+        od = canopen.import_od(ctx.args.eds)
+    errors, warnings = config_csv.validate(rows, ctx.args.node_id or 1, od=od)
     for line in config_csv.describe(warnings):
         ctx.reporter.note('warning, ' + line)
     for line in config_csv.describe(errors):
@@ -301,15 +331,34 @@ def _cmd_wipe_nvm(ctx):
     if not ctx.reporter.confirm(
             'Erase node {}\'s NVM? Only communication and identity, the node '
             'ID and the CAN termination stay; motor data and board calibration '
-            'go, and the blank template is loaded.'.format(ctx.node_id)):
+            'go{}.'.format(ctx.node_id, '' if ctx.args.no_template else
+                           ', and the blank template is loaded')):
         return EXIT_FAILED
     result = ops.wipe_nvm(ctx.session, ctx.node_id, ctx.reporter,
-                          backup=ctx.args.backup)
+                          backup=ctx.args.backup,
+                          template=not ctx.args.no_template, legacy=True)
     return EXIT_OK if result.ok else EXIT_FAILED
 
 
+#: The names a firmware A/B gives the steps (p4core.actuator.plans.ALIASES),
+#: and its group of all four.
+CALIBRATION_ALIASES = {'offsets': 'bias', 'gainfactor': 'gain',
+                       'encoder-offset': 'ezero', 'winding': 'ezero'}
+CALIBRATION_GROUPS = {'ab': ('bias', 'gain', 'ezero')}
+
+
+def _calibration_steps(names):
+    steps = []
+    for name in names:
+        for step in CALIBRATION_GROUPS.get(name, (name,)):
+            step = CALIBRATION_ALIASES.get(step, step)
+            if step not in steps:
+                steps.append(step)
+    return steps
+
+
 def _cmd_calibrate(ctx):
-    steps = ctx.args.steps or None
+    steps = _calibration_steps(ctx.args.steps) or None
     unknown = set(steps or ()) - set(CALIBRATION_STEPS)
     if unknown:
         ctx.reporter.warn('unknown step(s) {}; choose from {}'.format(
@@ -331,7 +380,8 @@ CALIBRATION_STEPS = [name for name, _ in _calibrate.STEPS]
 
 
 def add_common_commands(sub, only=None):
-    """Register scan/info/flash/config/set-id/reset/wipe-nvm/calibrate on *sub*.
+    """Register scan/info/version/nv/flash/config/set-id/reset/wipe-nvm/calibrate
+    on *sub*.
 
     *only* limits it to the named commands.  Returns {name: subparser} so an
     app can add options to one.
@@ -356,6 +406,27 @@ def add_common_commands(sub, only=None):
     if p:
         p.add_argument('--flashloader', action='store_true',
                        help='also read the flashloader version (reboots the puck)')
+
+    add('version', _cmd_version, 'firmware version and githash (0x100A, 0x3003)',
+        all_flag=True)
+
+    if only is None or 'nv' in only:
+        nv = sub.add_parser('nv', help='NV as a JSON file',
+                            description='NV as a JSON file')
+        nsub = _inherit_bus_options(
+            nv.add_subparsers(dest='nv_command', metavar='ACTION'))
+        nv.set_defaults(func=lambda ctx: (nv.print_help(), EXIT_USAGE)[1],
+                        needs_bus=False)
+        made['nv'] = nv
+        p = nsub.add_parser('save', help='write every NV value to a JSON file')
+        p.set_defaults(func=_cmd_nv_save, needs_bus=True, needs_node=True)
+        p.add_argument('file')
+        p = nsub.add_parser('restore', help='write a saved JSON back, Save.All, '
+                            'reboot and read it back')
+        p.set_defaults(func=_cmd_nv_restore, needs_bus=True, needs_node=True)
+        p.add_argument('file')
+        p.add_argument('--force', action='store_true',
+                       help='write a file saved from other firmware')
 
     p = add('flash', _cmd_flash, 'program firmware (.bin or .ebin) over CAN',
             all_flag=True)
@@ -390,6 +461,8 @@ def add_common_commands(sub, only=None):
         p = csub.add_parser('check', help='validate a CSV without a puck')
         p.set_defaults(func=_cmd_config_check, needs_bus=False)
         p.add_argument('csv')
+        p.add_argument('--eds', help="also check every row is in this EDS (the "
+                       "firmware's the CSV is for)")
 
         p = csub.add_parser('templates', help='list the shipped templates')
         p.set_defaults(func=_cmd_config_templates, needs_bus=False)
@@ -401,9 +474,13 @@ def add_common_commands(sub, only=None):
 
     p = add('wipe-nvm', _cmd_wipe_nvm,
             'erase NV but communication, identity, node ID and CAN termination, '
-            'for a new motor; loads the blank template',
+            'for a new motor; loads the blank template (4.3.x: writes the '
+            'defaults, no template)',
             needs_node=True)
     if p:
+        p.add_argument('--no-template', action='store_true',
+                       help='skip the blank template: a configuration CSV is '
+                       'loaded next')
         p.add_argument('--backup', metavar='CSV',
                        help='where to back the configuration up first (default: '
                        '~/p4-nvm-backups/node<ID>-<time>.csv)')
@@ -415,6 +492,6 @@ def add_common_commands(sub, only=None):
             all_flag=True)
     if p:
         p.add_argument('steps', nargs='*', metavar='STEP',
-                       help='any of {} (default: all, in that order)'.format(
-                           ', '.join(CALIBRATION_STEPS)))
+                       help='any of {}, or ab for bias, gain and ezero (default: '
+                       'all, in that order)'.format(', '.join(CALIBRATION_STEPS)))
     return made

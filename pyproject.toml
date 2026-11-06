@@ -28,4 +28,4 @@ package-dir = {"p4core" = ".", "p4core.actuator" = "actuator"}
 packages = ["p4core", "p4core.actuator"]
 
 [tool.setuptools.package-data]
-p4core = ["data/*.eds", "data/templates/*.csv"]
+p4core = ["data/*.eds", "data/nv/*.txt", "data/templates/*.csv"]
