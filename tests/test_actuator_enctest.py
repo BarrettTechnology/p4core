@@ -14,6 +14,7 @@ from p4core.reporter import Reporter                             # noqa: E402
 
 from p4core.actuator import enctest                                      # noqa: E402
 from p4core.actuator.drivecal import CalError                            # noqa: E402
+from p4core import cia402                                                 # noqa: E402
 
 
 class FastReporter(Reporter):
@@ -118,12 +119,25 @@ class LinearityTest(unittest.TestCase):
         # An amplifier over-temperature drops the field: the rotor stops
         # and the rest would read as encoder error (node 2, 2026-10-15).
         n = linearity_node()
-        n.set('StatusWord', None, 0x38)
         n.set('LastError', None, 0x4210)
+
+        def trip(mode):
+            if mode:            # the sweep's mode, after the enable
+                n.set('StatusWord', None, 0x38)
+        n.hook_write('SetModeOfOperation', None, trip)
         with self.assertRaises(CalError) as cm:
             enctest.test_encoder_linearity(n, FastReporter())
         self.assertIn('0x4210', str(cm.exception))
         self.assertEqual(n.get('SetModeOfOperation'), 0)
+
+    def test_a_fault_that_persists_at_enable_is_named(self):
+        n = linearity_node()
+        n.set('StatusWord', None, 0x38)
+        n.set('LastError', None, 0x4210)
+        with self.assertRaises(cia402.EnableRefused) as cm:
+            enctest.test_encoder_linearity(n, FastReporter())
+        self.assertIn('persists', str(cm.exception))
+        self.assertIn('amplifier over-temperature', str(cm.exception))
 
     def test_perfect_encoder_passes(self):
         n = linearity_node()

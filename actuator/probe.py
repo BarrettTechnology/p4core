@@ -15,3 +15,8 @@ CAL_I_MAX_A = 3.0
 #: the window; the steps that hold the raised current (Gain, Slope) shorten
 #: their dwell by dwell_scale (below) to keep the same I^2Rt.
 SENSE_FLOOR_COUNTS = 150.0
+#: Below the floor, the least a cap may leave: twice what the gain fit
+#: needs.  A cap between this and the floor (the voltage cap on a P4-16:
+#: 0.45 U_MAX / 8.7 ohm = 714 mA against an 829 mA floor) runs at the cap
+#: and says so rather than refusing to calibrate at all.
+SENSE_MIN_COUNTS = 60.0

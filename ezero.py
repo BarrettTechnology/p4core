@@ -28,7 +28,8 @@ revolution. The rotor turns one full revolution each way.
 import math
 import time
 
-from .cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, describe_error, write_mode
+from .cia402 import (MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, describe_error, enable,
+                     write_mode)
 F16_CYCLE = 65536          # Theta_e units per electrical cycle
 
 
@@ -153,9 +154,7 @@ def sweep(node, steps=16, dwell=0.1, current=None, progress=None, sleep=time.sle
     total = 2 * (lead + n)
     samples = []
     try:
-        sdo['ControlWord'].raw = 0x80
-        sdo['ControlWord'].raw = 0x06
-        sdo['ControlWord'].raw = 0x0F
+        enable(node, 'the field sweep')
         write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         sdo['Motor']['uq'].raw = 0      # uq == 0 keeps the firmware on the host's angle
         theta = 0

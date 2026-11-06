@@ -5,6 +5,8 @@ RatedTorque (0x6076), clamped to the working peak's per-mille on rated-unit
 firmware (+-1000 before).
 """
 
+import math
+
 
 #: The velocity and position loops run on the 1 kHz timer tick.
 VEL_LOOP_HZ = 1000.0
@@ -30,3 +32,15 @@ VEL_MAX_FRACTION = 0.1
 #: rated units (rated = peak).  Later firmware reaches the working peak's
 #: per-mille: steptest.velocity_output_limit() reads it.
 VEL_OUTPUT_LIMIT = 1000.0
+
+
+def velocity_plant_gain(rated_torque_mnm, enc_res):
+    """g: counts/s^2 per (per-mille demand / J), i.e. G(s) = g / (J s)."""
+    if rated_torque_mnm <= 0 or enc_res <= 0:
+        raise ValueError('RatedTorque and the encoder resolution must be positive')
+    return rated_torque_mnm * 1e-6 * enc_res / (2.0 * math.pi)
+
+
+def velocity_wc_of(kp, j_kg_m2, rated_torque_mnm, enc_res):
+    """The crossover (rad/s) a velocity Kp gives, ignoring the filter: Kp g / J."""
+    return kp * velocity_plant_gain(rated_torque_mnm, enc_res) / j_kg_m2

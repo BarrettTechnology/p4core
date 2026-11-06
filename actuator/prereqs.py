@@ -62,9 +62,17 @@ DEPS = {
     'runout': _d(requires=['poles', 'e_zero', 'isense_gain'],
                  uses=['i_cal', 'enc_filter', 'skip_k'],
                  provides=['runout', 'enc_filter']),
+    # The drag (J, Tc/B) and the Coulomb ff on its Tc.  After the loops,
+    # which the ff's PP moves need; they were designed on the coast's (or
+    # the CSV's) J, so a drag J that differs rescales the velocity gains.
+    'friction': _d(requires=['i_test', 'L', 'kt', 'J', 'e_zero',
+                             'isense_gain', 'current_pi', 'rated_torque',
+                             'vel_gains', 'pos_gains'],
+                   uses=['i_peak', 'limits', 'top_speed'],
+                   provides=['J', 'friction', 'friction_ff', 'vel_gains']),
     'cogging': _d(requires=['poles', 'e_zero', 'vel_gains', 'current_pi',
                             'latency'],
-                  uses=['runout', 'enc_filter', 'i_peak'],
+                  uses=['runout', 'enc_filter', 'i_peak', 'friction_ff'],
                   provides=['cogging']),
     'save': _d(provides=['nv']),
     'export': _d(uses=['nv'],

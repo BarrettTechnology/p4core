@@ -23,7 +23,7 @@ import time
 
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
-from . import ezero
+from . import cia402, ezero
 from .flash import read_version
 from .reporter import Reporter
 
@@ -169,11 +169,10 @@ def isense_window(node):
     return not problems, problems
 
 
-def _enable(sdo):
-    """Clear faults, ready to switch on, operation enabled."""
-    sdo['ControlWord'].raw = 0x80
-    sdo['ControlWord'].raw = 0x06
-    sdo['ControlWord'].raw = 0x0F
+def _enable(node, what):
+    """Clear faults, ready to switch on, operation enabled; a refusal says
+    why (cia402.enable)."""
+    cia402.enable(node, what)
 
 
 def _read_filtered(node, samples=16, dwell_s=0.005, sleep=time.sleep,
@@ -382,7 +381,7 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=100,
     scale = bias_scale(node)
     previous = (sdo['Alpha']['Bias'].raw / scale, sdo['Beta']['Bias'].raw / scale)
     try:
-        _enable(sdo)
+        _enable(node, 'the bias calibration')
         sdo['Theta_e'].raw = 0x7FFF         # stall at the alpha peak (+pi)
         sdo['Motor']['ud'].raw = 0
         write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
@@ -479,7 +478,7 @@ def calibrate_gain(node, reporter=None, newton_ramp=False, post_ramp_s=0.5,
     base_ma = id_scale(node)[0]
     samples, ids = [], []
     try:
-        _enable(sdo)
+        _enable(node, 'the gain calibration')
         write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         sdo['Motor']['uq'].raw = 0
         sdo['Theta_e'].raw = 0

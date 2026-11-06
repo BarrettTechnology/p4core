@@ -22,8 +22,7 @@ import time
 
 import numpy as np
 
-from p4core.cia402 import (CLEAR_FAULT, MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, write_mode,
-                           OP_ENABLED, SHUTDOWN)
+from p4core.cia402 import MODE_IDLE, MODE_PHASE_VOLTAGE_ANGLE, enable, write_mode
 
 from . import drivecal
 from .drivecal import CalError
@@ -85,9 +84,7 @@ def _wait_settled(node, reporter, timeout=1.5, poll_s=0.06, need=3):
 def _energise(node):
     """Voltage-angle mode from IDLE, through a fault clear."""
     node.sdo['SetModeOfOperation'].raw = MODE_IDLE
-    node.sdo['ControlWord'].raw = CLEAR_FAULT
-    node.sdo['ControlWord'].raw = SHUTDOWN
-    node.sdo['ControlWord'].raw = OP_ENABLED
+    enable(node, 'the slope calibration')
     write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
 
 

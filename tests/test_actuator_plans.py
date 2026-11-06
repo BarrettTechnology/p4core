@@ -14,7 +14,7 @@ from p4core.tests.fake import current_node, legacy_node          # noqa: E402
 # p4sysid registers its steps into the same tables; without it these are
 # the actuator steps alone.
 ALONE = ('encoder', 'bias', 'gain', 'slope', 'fold', 'winding', 'runout',
-         'cogging', 'save', 'export')
+         'friction', 'cogging', 'save', 'export')
 
 
 def _alone(test):
@@ -59,7 +59,8 @@ class Alone(unittest.TestCase):
         got = [(st.key, stage) for _, stage, st in plans.numbered(plans.ACTUATOR)]
         self.assertEqual(got, [('encoder', 1), ('bias', 1), ('gain', 2),
                                ('slope', 3), ('winding', 3), ('fold', 4),
-                               ('runout', 4), ('cogging', 4)])
+                               ('runout', 4), ('friction', 4),
+                               ('cogging', 5)])
 
     def test_run_order(self):
         self.assertEqual(plans.run_order(['cogging', 'bias', 'runout']),
@@ -68,6 +69,8 @@ class Alone(unittest.TestCase):
     def test_aliases(self):
         self.assertEqual(plans.canonical('enczero'), 'winding')
         self.assertEqual(plans.canonical('runout-table'), 'runout')
+        for name in ('drag', 'friction_ff', 'friction-ff'):
+            self.assertEqual(plans.canonical(name), 'friction')
         with self.assertRaises(plans.PlanError):
             plans.canonical('velocity_refine')
 

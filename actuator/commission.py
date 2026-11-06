@@ -27,7 +27,7 @@ from canopen.sdo.exceptions import SdoAbortedError
 from p4core.calibrate import has_rated_units, read_kt, write_kt
 
 from . import fits
-from .device import SysidError
+from .device import DRAG_CURRENT_FRACTION, SysidError
 
 
 # ---------------------------------------------------------------------------
@@ -797,3 +797,110 @@ def _stage_winding(dev, limits, reboot, rep):
     v['commutation_error_deg'] = wr['commutation_error_deg']
     v['e_zero'] = wr['e_zero']
     v['e_polarity'] = wr['e_polarity']
+
+
+# ---------------------------------------------------------------------------
+# Drag: J, B and Coulomb friction (moved from p4sysid)
+# ---------------------------------------------------------------------------
+#: Share of the supply's power (bus x Limits.supply_a) a spin-up may draw.
+SUPPLY_USE = 0.6
+#: Coast J and drag J agreeing within this.
+J_AGREEMENT = 0.20
+#: Drag top speed as a fraction of the no-load speed.
+DRAG_SPEED_FRACTION = 0.3
+#: B is reported as measured only when B w_top is this share of Tc.
+B_MIN_SHARE = 0.03
+
+
+def supply_limited_rpm(limits, bus_v, kt_nm_per_a, r_ohm, current_a):
+    """The speed at which *current_a* (A peak, on q) draws SUPPLY_USE of
+    the supply's power: torque times speed plus the copper, over the bus.
+    None without a supply limit or a Kt."""
+    if not limits.supply_a or not kt_nm_per_a or not current_a:
+        return None
+    p = SUPPLY_USE * bus_v * limits.supply_a
+    p -= 1.5 * (r_ohm or 0.0) * current_a ** 2
+    torque = kt_nm_per_a / math.sqrt(2.0) * current_a
+    if p <= 0:
+        return 0.0
+    return p / torque * 60.0 / (2 * math.pi)
+
+
+def drag_current(i_max_a, i_test_a, rs=None, counts_per_a=None):
+    """The drag's hold current: DRAG_CURRENT_FRACTION of the peak, raised
+    so its half-current run still reads SENSE_MIN_COUNTS, within the
+    session's test current.  Node 5's EC16 (P4-16, ~187 counts/A, i_peak
+    1.17 A) dragged at 0.06 A, 11 counts: the rotor pulled out of step at
+    200 rpm with three times the friction's current in hand."""
+    from .probe import SENSE_MIN_COUNTS
+    i_a = DRAG_CURRENT_FRACTION * i_max_a
+    cpa = counts_per_a or (rs or {}).get('counts_per_a')
+    if cpa:
+        i_a = max(i_a, 2.0 * SENSE_MIN_COUNTS / cpa)
+    return min(i_test_a, i_a)
+
+
+def _stage_drag(dev, limits, reboot, rep):
+    v, c = rep.values, rep.ctx
+    s, coast, no_load = c['s'], c['coast'], c['no_load']
+    rep.stage = 'drag'
+    top = limits.max_speed_rpm
+    j = coast['j_kg_m2']
+    if not c.get('skip_drag'):
+        top_drag = min(1000.0, DRAG_SPEED_FRACTION * no_load['no_load_ideal_rpm'],
+                       0.5 * top if top else 1000.0)
+        i_drag = drag_current(s['i_max_a'], c['i_test'], c.get('rs'),
+                              (c.get('probe') or {}).get('counts_per_a'))
+        # Pessimistic: the whole hold current as torque.
+        supply_rpm = supply_limited_rpm(limits, c.get('bus') or s['v_nom'],
+                                        v['kt_nm_per_a'], v.get('r_ohm'),
+                                        i_drag)
+        if supply_rpm is not None and supply_rpm < top_drag:
+            dev._log('commission: drag top {:.0f} rpm, not {:.0f}: the '
+                     'supply budget'.format(supply_rpm, top_drag))
+            top_drag = max(supply_rpm, 200.0)
+        drag = dev.estim_drag(
+            kt_nm_per_a=v['kt_nm_per_a'], ld_h=v['ld_h'], lq_h=v['lq_h'],
+            current_a=i_drag,
+            top_rpm=top_drag, low_rpm=min(200.0, 0.2 * top_drag),
+            step_rpm=0.8 * top_drag, j_prior_kg_m2=coast['j_kg_m2'])
+        rep.raw['drag'] = drag
+        j = drag['j_kg_m2']
+        v['b_nm_s_per_rad'] = drag['b_nm_s_per_rad']
+        v['tc_nm'] = drag['a_nm']
+        w_top = top_drag * 2 * math.pi / 60.0
+        b_share = drag['b_nm_s_per_rad'] * w_top / drag['a_nm'] \
+            if drag['a_nm'] > 0 else 0.0
+        rep.check('B resolved', b_share >= B_MIN_SHARE,
+                  'viscous torque at the top drag speed ({:.0f} rpm) is '
+                  '{:.1f} % of Coulomb; below {:.0f} % B trades against Tc '
+                  'and is not a measurement'.format(
+                      top_drag, b_share * 100, B_MIN_SHARE * 100))
+        if coast['j_kg_m2']:
+            rep.check('J drag vs coast', abs(j / coast['j_kg_m2'] - 1)
+                      <= J_AGREEMENT,
+                      'drag {:.3e} vs coast {:.3e} kg.m^2 ({:+.0f} %)'.format(
+                          j, coast['j_kg_m2'],
+                          (j / coast['j_kg_m2'] - 1) * 100))
+        if coast.get('tc_over_j') is not None:
+            v['tc_coast_nm'] = coast['tc_over_j'] * j
+            v['b_coast_nm_s_per_rad'] = coast['b_over_j'] * j
+        v['friction_source'] = 'drag'
+        if b_share < B_MIN_SHARE:
+            # B is lost in Tc over this speed range: report the coast's pair
+            # (it spans a wider range) if it found a positive B, otherwise
+            # no B and the drag's friction at mid range as Tc.
+            if v.get('b_coast_nm_s_per_rad', 0.0) > 0.0:
+                v['b_nm_s_per_rad'] = v['b_coast_nm_s_per_rad']
+                v['tc_nm'] = v['tc_coast_nm']
+                v['friction_source'] = 'coast'
+            else:
+                v['tc_nm'] = drag['a_nm'] + \
+                    drag['b_nm_s_per_rad'] * w_top / 2.0
+                v['b_nm_s_per_rad'] = 0.0
+                v['friction_source'] = 'drag, B unresolved'
+    else:
+        if j and coast.get('tc_over_j') is not None:
+            v['tc_nm'] = coast['tc_over_j'] * j
+            v['b_nm_s_per_rad'] = coast['b_over_j'] * j
+    v['j_kg_m2'] = j

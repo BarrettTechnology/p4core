@@ -180,6 +180,17 @@ class TestStickSlip(unittest.TestCase):
     def test_too_short_is_none(self):
         self.assertIsNone(cogging.speed_spread(frames(n=20)))
 
+    def test_the_16_bit_position_wraps(self):
+        # The stream's position is I16: one pass through +-32768 once read
+        # as a 65536-count jump, 'means -30 +- 2390 rpm' at +30 rpm.
+        for sgn in (1, -1):
+            fr = frames(n=1600, rate=sgn * 2.0)
+            fr[:, 2] = np.mod(fr[:, 2] + 2 ** 15, 2 ** 16) - 2 ** 15
+            mean, std = cogging.speed_spread(fr)
+            self.assertAlmostEqual(mean, sgn * 2.0, places=2)
+            self.assertLess(std, 0.1)
+            self.assertEqual(cogging.clean_frames(fr, RES)[1], 0)
+
 
 class TestLeadScan(unittest.TestCase):
     def scan(self, best_us, budget=806.0):

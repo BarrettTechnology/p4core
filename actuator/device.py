@@ -43,15 +43,19 @@ guessed — the object dictionary comments in the EDS are in places stale):
       will stop a thermal test.  This module enforces the limit itself.
 """
 
+import contextlib
 import math
+import struct
 import time
+
+import numpy as np
 
 
 from p4core.calibrate import (read_kt, has_rated_units, permille_base_ma, working_peak_ma, read_bus_mv,
                                rated_torque_mnm as read_rated_torque_mnm)
 from p4core import cia402
 
-from . import fits, winding
+from . import dragfit, fits, winding
 from .pdo_layout import PdoLayout
 from .constants import PWM_PATTERNS_PER_CONTROL_CYCLE, THETA_E_PER_ELEC_REV
 #: A winding reading outside this range is no sensor, not a temperature: an
@@ -447,6 +451,295 @@ class _Stream(_BorrowedPdo):
         return ds / dc / 1000.0
 
 
+# --- Moved from p4sysid: the drag and what it stands on ---------------------
+OD_CAPTURE_RECORDS = (0x3004, 2)
+OD_CAPTURE_DECIMATE = (0x3004, 3)
+CAPTURE_IDLE, CAPTURE_COLLECT, CAPTURE_FULL = 0, 1, 2
+#: What a record holds — LOG_SRC_* in app/log.h.  Both halves of every record
+#: are 16 bits, low half first; what they mean is what differs.
+#:
+#:   DQ       id and iq, per-mille of i_peak — calibrated, Park-transformed
+#:            through the *live* commutation angle, and taken after the export
+#:            low-pass.
+#:   ENC_VEL  encoder position (wraps) and the velocity of the same cycle.
+#:   ALBE     alpha and beta in **signed mA**, before the Park transform and
+#:            before the export filter.  This is the source identification
+#:            uses: nothing in that path has a time constant, so a fit sees the
+#:            winding rather than a filter, and because the host knows the angle
+#:            it commanded it can redo Park itself — which also makes
+#:            |I| = hypot(alpha, beta) available as a free misalignment check.
+#:   ADC_RAW  the raw counts behind alpha and beta, for calibration debugging.
+LOG_SRC_DQ, LOG_SRC_ENC_VEL, LOG_SRC_ALBE, LOG_SRC_ADC_RAW = 0, 1, 2, 3
+#:   IQR_POS  as IQ_POS, but iq Parked with the encoder's angle even while the
+#:            drive commutates at a forced one: the torque current of a DRAG,
+#:            whose own loop regulates the field's frame instead.
+LOG_SRC_IQR_POS = 6
+#: Firmware from stm32 0ea2320 on has no packed sources: its logger records
+#: OD objects, the *channels*, named by TPDO4's mapping, each in its OD type,
+#: and ,5 reads them one channel at a time.  What the packed sources held are
+#: objects there (0x3010,7-11, written every control cycle).  Each source maps
+#: to the two channels that were its low and high halves, in that order, so
+#: one decode serves both kinds of firmware.  The probe is 0x3010,11.
+CAPTURE_TPDO = 3
+CAPTURE_CHANNELS = {
+    LOG_SRC_DQ: (0x30100610, 0x60780010),       # id, iq per-mille (filtered)
+    LOG_SRC_ALBE: (0x30100710, 0x30100810),     # alpha, beta mA
+    LOG_SRC_IQ_POS: (0x30100B10, 0x30100910),   # position low 16, iq mA
+    LOG_SRC_IQR_POS: (0x30100B10, 0x30100A10),  # position low 16, rotor iq mA
+}
+OD_INJECT_CURRENT = (0x3015, 2)     # HOLD target current, mA
+OD_INJECT_THETA = (0x3015, 4)       # forced electrical angle, F16
+OD_INJECT_AXIS = (0x3015, 7)        # 0 = d, 1 = q
+OD_INJECT_MS = (0x3015, 8)          # dead-man, ms; 0 is rejected
+OD_INJECT_STATE = (0x3015, 9)       # INJ_ST_*
+OD_INJECT_DRAG_VEL = (0x3015, 15)   # DRAG target speed, cts/s, user frame
+OD_INJECT_DRAG_ACC = (0x3015, 16)   # DRAG acceleration, cts/s^2; 0 rejected
+OD_INJECT_DRAG_NOW = (0x3015, 17)   # DRAG field speed now, cts/s (read-only)
+OD_INJECT_DRAG_DAMP = (0x3015, 18)  # DRAG damping gain, Q8 (see inject.h)
+#: DRAG turns a settled d-axis HOLD's field at a ramped speed, with the drive's
+#: own current loop in the field's frame; the rotor follows on the magnetic
+#: spring.  No velocity loop, so no J or B, holds the speed.  Firmware releases
+#: and reports TRIPPED if the rotor falls 60 electrical degrees behind.
+INJ_DRAG = 5
+(INJ_ST_IDLE, INJ_ST_HOLDING, INJ_ST_STEPPED,
+ INJ_ST_INJECTING, INJ_ST_TRIPPED) = 0, 1, 2, 3, 4
+#: Largest duration bound firmware accepts — INJ_MAX_MS in app/inject.h.
+INJ_MAX_MS = 5000
+#: Integrator gain of the HOLD regulator, 2^-INJ_KI_SH per control cycle —
+#: INJ_KI_SH in app/inject.h.  Mirrored here only to predict how long a hold
+#: takes to settle; see _inject_settle_s.
+INJ_KI_SH = 9
+#: Axis names, for messages.
+INJ_AXIS_D, INJ_AXIS_Q = 0, 1
+#: Seconds allowed for a HOLD to settle before anything is measured from it.
+#:
+#: The loop is a pure integrator with a gain of 2^-9 per control cycle
+#: (INJ_KI_SH in app/inject.h), deliberately slow: it only has to place a
+#: settled operating point, never to track one.  Working the closed-loop
+#: constant out on a P4-42 — U_MAX 24.2 V, Rs 0.30 ohm, i_peak 28.3 A — one F16
+#: volt buys 2.9 F16 of current, so the loop constant is 512/2.9 = 179 control
+#: cycles, about 36 ms at 5 kHz.  Two hundred milliseconds is five of those.
+#:
+#: Sized generously rather than tightly on purpose: over-waiting costs a
+#: fraction of a second per level, and under-waiting puts the whole
+#: measurement on a current that is still moving.  _inject_settle_s scales it
+#: by how far the winding is from what the estimate above assumed.
+INJ_SETTLE_S = 0.20
+#: What a hold's dead-man keeps past its settle, under INJ_MAX_MS: the
+#: records a level captures on top (see _inject_settle_s).
+INJ_SETTLE_HEADROOM_S = 0.5
+#: Extra milliseconds added to every dead-man bound over what the excitation is
+#: expected to need.  The bound exists to catch a host that has stopped paying
+#: attention, so it wants to be comfortably longer than the plan and nowhere
+#: near INJ_MAX_MS.
+INJ_DEADMAN_MARGIN_MS = 250
+#: Drag (estim_drag).  The higher of its two d currents, as a fraction of
+#: i_peak (the other is half of it): the spring's peak torque is 1.5 pp psi I,
+#: so the lower one sets how hard the profile may accelerate.  3 A on a P4-42 is 55 mN.m against a ~1e-5 kg.m^2 rotor, and
+#: 1.5 I^2 Rs of heat, about 3 W, for the few seconds the staircase takes.
+DRAG_CURRENT_FRACTION = 0.1
+#: The profile: from DRAG_LOW_RPM to DRAG_TOP_RPM and back in DRAG_STEP_RPM
+#: steps, DRAG_REPEATS times, both directions.  Every step up is an
+#: acceleration and every step down a deceleration through the same speeds,
+#: which is what separates J from friction; the spread of cruise speeds is
+#: what separates B from Tc.  The default is one step each way -- a triangle
+#: -- because J lives in the ramps: a ramp's inertial impulse J dw has to
+#: stand out of the friction impulse of its whole window, and on a P4-42
+#: (J 6.7e-6, Tc 3 mN.m) a 200 rpm step's is a tenth of it.  On the bench,
+#: 200 rpm steps read J 17-27 % high and moved with the acceleration
+#: (7.4/7.3/7.9e-6 at 125/250/500 rad/s^2); 800 rpm ramps, repeated, read
+#: 6.64-6.65e-6 at 500 rad/s^2 and 1.4 A, run to run, against 6.68e-6 from
+#: id = 0 torque pulses (impulse over the speed gained).
+DRAG_LOW_RPM = 200
+DRAG_TOP_RPM = 1000
+DRAG_STEP_RPM = 800
+DRAG_REPEATS = 4
+#: Field acceleration, rad/s^2 mechanical: the ceiling.  What the staircase
+#: uses comes from the spring it finds.  A ramp of a shifts the load angle by
+#: pp a / w_n^2 electrical (J a against a stiffness of J w_n^2, so Kt and J
+#: both drop out), and the spring overshoots that by DRAG_OVERSHOOT; so the
+#: acceleration is the one that keeps the friction's load angle plus the
+#: ramp's, overshoot and all, inside DRAG_LOAD_BUDGET_DEG.  Halved after a
+#: pull-out, at most DRAG_RETRIES times.
+DRAG_ACCEL_RAD_S2 = 500.0
+DRAG_RETRIES = 2
+#: Peak load angle, electrical degrees, the acceleration is sized to.  The
+#: firmware trips at 60 (INJ_DRAG_TRIP_F16).
+DRAG_LOAD_BUDGET_DEG = 40.0
+#: The damping ratio 0x3015,18 is set for, from the first arm on.  On its
+#: own the spring barely damps at all (the current loop removes the back-EMF
+#: current that damps a voltage-mode drag), and on a real motor it is worse
+#: than neutral: a P4-42 at 1.4 A, dragged undamped to 200 rpm, rang at its
+#: 27 Hz spring frequency with a load angle that grew to +-50 deg and tripped
+#: within 0.3 s.  So the drag is never undamped.  The damping acts on the
+#: field, not on the torque the fit reads, so it costs the fit nothing, and
+#: it is forgiving: on that motor a gain from a quarter of the right one to
+#: four times it held the same drag, so the spring frequency it is set from
+#: only has to be roughly right.
+DRAG_DAMPING_RATIO = 0.5
+#: Peak over steady load angle for a ramp's start, at that damping ratio
+#: (1 + exp(-pi z / sqrt(1 - z^2)), with a margin).
+DRAG_OVERSHOOT = 1.25
+#: The spring frequency comes from its stiffness, 1.5 pp psi I cos(load) =
+#: Kt_pk pp I cos(load) per mechanical radian, over J -- a prior J, since J is
+#: the unknown: the drive's stored Calibration.j, or DRAG_J_PRIOR_KG_M2 when
+#: there is none, and for the full-current run the J the half-current run
+#: fitted.  It cannot be read off the drag itself: undamped it is unsafe, and
+#: damped, the 2x-electrical and 2x-mechanical ripple of a real motor are
+#: bigger than what is left of the ring.  The fallback is a heavy rotor, which
+#: sizes a gentle acceleration and overdamps a light one; both are safe.
+DRAG_J_PRIOR_KG_M2 = 3e-5
+#: Stored J outside this range (kg.m^2) is taken for an unset default.
+DRAG_J_PLAUSIBLE = (1e-8, 1e-2)
+#: The first ramp, 0 to DRAG_LOW_RPM, before the friction is known.
+DRAG_START_ACCEL_RAD_S2 = 100.0
+#: Cruise recorded at the low speed to find the friction's load angle.
+DRAG_LOAD_S = 0.3
+#: Cruise captured after each step's ramp, and the settle before the first.
+DRAG_CRUISE_S = 0.04
+DRAG_SETTLE_S = 0.3
+#: Windows that come this close to standstill are left out of the fit.
+DRAG_MIN_SPEED_RAD_S = 5.0
+#: Cruise after each step, in revolutions: whole ones, so the once- and
+#: twice-per-revolution ripple of a real motor (encoder error, load) averages
+#: out of the friction instead of landing in it.  Never shorter than
+#: DRAG_CRUISE_S.
+DRAG_CRUISE_REVS = 2
+DRAG_RPDO = 3
+DRAG_RPDO_MAPPING = (0x30150F20, 0x30150108)
+#: Frames either side of a window, in seconds, that its clock is fitted on.
+DRAG_CLOCK_SPAN_S = 0.3
+#: TPDO3 (0-based 2), borrowed beside the stream when the firmware has the
+#: voltage sums (0x3004,13-14): the field-frame ud and uq the current loop
+#: asked for, summed over the same cycles as the stream's, two I32 -- a
+#: classic frame -- paired with the stream's frame of the same SYNC by when
+#: they arrived.  From them the drag measures the flux, so Kt, with no
+#: velocity loop (dragfit.drag_flux_fit).
+VOLT_TPDO = 2
+VOLT_MAPPING = (0x30040D20, 0x30040E20)
+VOLT_KINDS = 'ss'
+#: Two frames of one SYNC arrive within this of each other, and a SYNC
+#: period from the next pair.
+VOLT_PAIR_S = 0.3 / STREAM_SYNC_HZ
+#: The spring rings on after each ramp; a cruise's voltage is taken from
+#: this long after the ramp ends, over whole revolutions.
+DRAG_CRUISE_SETTLE_S = 0.05
+#: Commutation latency (0x3013,7 in 0.01 PWM period, 0x3013,5 in us): the
+#: request is applied that long after the angle it was turned through.
+OD_ENC_LATENCY_CP = (0x3013, 7)
+OD_ENC_LATENCY_US = (0x3013, 5)
+#: Its pipeline part as firmware computes it from the PWM timing ((5K+1) PWM
+#: periods, 0.1 us, read-only); 0x3013,7 is obsolete where this exists.
+OD_ENC_LATENCY_PIPE = (0x3013, 10)
+#: Kt that sizes the drag's spring when neither the caller nor the drive
+#: has one and the flux is to be measured: sizing only.
+DRAG_KT_PRIOR_NM_PER_A = 0.02
+#: Electrical angle every d-axis measurement is taken at.
+#:
+#: One angle, unlike the Rs sweep, and it does not have to be more: the Rs
+#: sweep averages over thirds of a revolution because the alpha and beta
+#: current-sense channels have separate gain calibrations, so how much of their
+#: mismatch lands in id depends on where the rotor is — and Rs is read off the
+#: *level* of the current, which that mismatch scales directly.  A time
+#: constant is read off the *shape* of the rise, and a scale factor on the
+#: whole curve leaves the shape alone.
+LS_THETA_E = 0
+#
+# The time base is measured on the device rather than derived from the control
+# rate, because the derivation was wrong on the first firmware that shipped the
+# buffer and wrong in the one way that does not announce itself.
+#
+# pwm.c calls logRecord() from two arms of the ISR's pattern switch — case 1,
+# left over from the log.c this replaced, and case 3, added with the buffer.
+# Both fire once per control cycle, so the buffer takes two records per cycle
+# and the second is a copy of the first (*motor.id is only written in case 3).
+# A host assuming one record per cycle therefore reads a 25.6 ms capture as
+# 51.2 ms and every time constant fitted from it comes out exactly 2x too long.
+#
+# That is worth measuring around rather than correcting for.  A 2x error here
+# is silent: the waveform still looks like a clean exponential, the fit quality
+# is untouched, and on this P4-42 the doubled answer (0.258 mH) lands within
+# 1 % of the puck's own configured lt — an agreement that reads as confirmation
+# and is a coincidence.  Deriving the number a second time from the same source
+# would not have caught that; asking the device does.
+#
+#: Records and length of the timing capture.  The decimation is sized from
+#: the control period so the run takes CAPTURE_RATE_SECONDS at any rate: a
+#: fixed 2000 was 5 s at 20 kHz control and 50 s at a blank board's 4 kHz.
+#: Two seconds is still three orders of magnitude clear of the ~0.7 ms bus
+#: round trip that makes timing an undecimated 512-record capture hopeless.
+#: CAPTURE_RATE_DECIMATE, when set, overrides the sizing (the tests).
+CAPTURE_RATE_RECORDS = 100
+CAPTURE_RATE_SECONDS = 2.0
+CAPTURE_RATE_DECIMATE = None
+#: 0x3004,3 is UNSIGNED16.
+CAPTURE_DECIMATE_MAX = 0xFFFF
+#: How far the measured interval may sit from a whole number of PWM periods
+#: before it is rejected.  The interval is quantised to that grid — the ISR
+#: cannot record at anything else — which also discards the SDO polling
+#: overhead in the timing loop (about 1 % here, always positive).
+CAPTURE_RATE_TOLERANCE = 0.25
+class _DragPulledOut(Exception):
+    """The drag tripped: the rotor fell 60 electrical degrees behind."""
+class _CaptureMap(_BorrowedPdo):
+    """TPDO4's mapping naming the logger's channels for one capture.  Left
+    disabled, so nothing goes on the bus; the firmware latches the channels at
+    arm, and reads them back by them, so it is held from before the arm until
+    the capture has been read."""
+
+    enabled = False
+
+    def __init__(self, dev, channels):
+        node_id = getattr(dev.node, 'id', 127) or 127
+        super().__init__(dev, 0x1800 + CAPTURE_TPDO, 0x1A00 + CAPTURE_TPDO,
+                         channels, 1, 0x180 + 0x100 * CAPTURE_TPDO + node_id)
+class _VoltStream(_BorrowedPdo):
+    """The voltage TPDO beside the stream: ``frames`` gathers
+    ``(ud_sum, uq_sum, host_time_s)`` in the order they arrive.  The _Stream
+    it is opened with puts the node in OPERATIONAL and runs the SYNC.
+    """
+
+    def __init__(self, dev):
+        node_id = getattr(dev.node, 'id', 127) or 127
+        super().__init__(dev, 0x1800 + VOLT_TPDO, 0x1A00 + VOLT_TPDO,
+                         VOLT_MAPPING, 1, 0x180 + 0x100 * VOLT_TPDO + node_id)
+        self.frames = []
+        self.layout = PdoLayout.from_words(VOLT_MAPPING, VOLT_KINDS,
+                                           'voltage TPDO{}'.format(VOLT_TPDO + 1))
+
+    def _on_frame(self, can_id, data, timestamp):
+        v = self.layout.decode(data)
+        if v is not None:
+            self.frames.append(v + (timestamp,))
+
+    def __enter__(self):
+        super().__enter__()
+        self.dev.node.network.subscribe(self.cob, self._on_frame)
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self.dev.node.network.unsubscribe(self.cob, self._on_frame)
+        except Exception:
+            pass
+        if self.layout.problem():
+            self.dev._log(self.layout.problem())
+        super().__exit__(*exc)
+        return False
+class _DragRpdo(_BorrowedPdo):
+    """The RPDO that steps a DRAG: target speed, then the mode that arms it,
+    applied on receipt (type 255)."""
+
+    def __init__(self, dev):
+        node_id = getattr(dev.node, 'id', 127) or 127
+        super().__init__(dev, 0x1400 + DRAG_RPDO, 0x1600 + DRAG_RPDO,
+                         DRAG_RPDO_MAPPING, 255, 0x200 + 0x100 * DRAG_RPDO + node_id)
+
+    def go(self, counts_per_s):
+        self.dev.node.network.send_message(
+            self.cob, struct.pack('<iB', int(counts_per_s), INJ_DRAG))
+
+
 class P4Drive:
     """One puck, as the calibrations drive it.
 
@@ -771,9 +1064,8 @@ class P4Drive:
         that nothing can reach Operation Enabled with it still injecting.
         """
         self._suspend_purr()
-        self.node.sdo['ControlWord'].raw = 0x80   # fault reset
-        self.node.sdo['ControlWord'].raw = 0x06   # shutdown
-        self.node.sdo['ControlWord'].raw = 0x0F   # enable operation
+        # Fault reset, shutdown, enable operation; a refusal names the fault.
+        cia402.enable(self.node, 'Enable')
 
     def _suspend_purr(self):
         """Hold the purr overlay off, remembering what it was.
@@ -1310,3 +1602,756 @@ class P4Drive:
                 'one_sided': one_sided,
                 'max_width': tel['max_width'], 'period': tel['period'],
                 'pwm_hz': tel['pwm_hz']}
+
+    def _begin_injection(self):
+        """Get the bridge switching, then let the injection take it over.
+
+        Mode 12 with both voltages at zero, which is what enables the bridge —
+        firmware skips hal_pwm_disable() while an injection is active but
+        nothing *enables* it on arming, so arming out of MODE_IDLE would servo a
+        current loop into a dead bridge and time out on a dead-man.
+
+        Zero voltage rather than a small one, and no settling wait: mode -1
+        here is scaffolding for the excitation, not an excitation itself.  From
+        case 4 onwards the injection owns the dq output ahead of the mode, so
+        nothing this writes to Motor.ud is ever applied.
+        """
+        self.op_enable()
+        self.node.sdo['Motor']['ud'].raw = 0
+        self.node.sdo['Motor']['uq'].raw = 0
+        self.set_mode(MODE_PHASE_VOLTAGE_ANGLE)
+
+    def _inject_read_signed(self, od):
+        """Read an object firmware declares INTEGER16, whatever the EDS says.
+
+        0x3015,10 is a voltage and goes negative on the q axis.  A stack that
+        has the object typed unsigned — an EDS out of step with the firmware,
+        which is the normal case for a freshly added subindex — hands back
+        65036 for -500 and the fit silently acquires an enormous outlier.
+        """
+        value = self._inject_read(od) & 0xFFFF
+        return value - 0x10000 if value & 0x8000 else value
+
+    def _inject_arm(self, mode, duration_ms, params=None):
+        """Stage *params*, then arm *mode*.
+
+        The mode write goes last because the mode write is what latches
+        everything else; that ordering is the whole protocol, not a style, and
+        firmware relies on it to keep the ISR from ever seeing half an
+        excitation.
+
+        The dead-man is written like any other parameter and is checked here
+        before the device rejects it, so the message names the bound rather
+        than arriving as a bare SDO abort.
+        """
+        duration_ms = int(round(duration_ms))
+        if not 0 < duration_ms <= INJ_MAX_MS:
+            raise SysidError(
+                'the injection duration bound must be between 1 and {} ms, not '
+                '{} — firmware rejects 0 rather than reading it as "no limit"'
+                .format(INJ_MAX_MS, duration_ms))
+
+        for od, value in (params or {}).items():
+            self._inject_write(od, value)
+        self._inject_write(OD_INJECT_MS, duration_ms)
+        try:
+            self._inject_write(OD_INJECT_MODE, mode)
+        except Exception as exc:
+            raise SysidError('the device refused injection mode {}: {}'
+                             .format(mode, exc))
+
+    def _inject_settle_s(self, rs_ohm=None, floor_s=INJ_SETTLE_S):
+        """Seconds to let a HOLD reach its target current.
+
+        The regulator is a pure integrator of gain 2^-INJ_KI_SH per control
+        cycle, so its closed-loop constant is 2^INJ_KI_SH / g cycles, where g
+        is the F16 current one F16 volt buys:
+
+            g = U_MAX / (Rs * i_peak)
+
+        Five of those.  A *larger* Rs makes g smaller and the loop slower,
+        which is why this takes the winding as an argument at all — and why it
+        can only ever extend *floor_s*, never shorten it below it: the floor is
+        what holds when Rs is not yet known, which is exactly when it is
+        measured.  *floor_s* defaults to INJ_SETTLE_S, sized for a winding
+        whose own L/R time constant might still be moving current when the
+        loop above says it is done; a caller that knows this excitation never
+        depends on L settling (the Rs sweep: every bench motor's L/R, 37 us to
+        650 us, is two to three orders of magnitude under this loop's own
+        constant) may pass a smaller one.
+        """
+        if not rs_ohm or rs_ohm <= 0:
+            return floor_s
+        s = self.scaling or self.refresh_scaling()
+        i_peak_a = s['i_peak_ma'] / 1000.0
+        u_max = s['u_max_v']
+        gain = u_max / (rs_ohm * i_peak_a)
+        if gain <= 0:
+            return floor_s
+        tau_s = (2 ** INJ_KI_SH) / gain * self._control_period_s()
+        settle = max(floor_s, 5.0 * tau_s)
+        # The hold's dead-man is at most INJ_MAX_MS, with the margin and a
+        # capture's records on top.  A big winding against a big i_peak (a
+        # blank template's 10 A on a 10 ohm P4-16: tau 1 s) runs over it.
+        # Three time constants still put the hold within 5 % of its target.
+        cap = (INJ_MAX_MS - INJ_DEADMAN_MARGIN_MS) / 1e3 - INJ_SETTLE_HEADROOM_S
+        if settle > cap:
+            if cap < 3.0 * tau_s:
+                raise SysidError(
+                    'a HOLD on {:.2f} ohm settles in {:.1f} s (tau {:.2f} s at '
+                    'i_peak {:.1f} A), past the {:.0f} ms dead-man: i_peak '
+                    '(Calibration.i_peak) is far above this motor\'s'.format(
+                        rs_ohm, 5.0 * tau_s, tau_s, i_peak_a, INJ_MAX_MS))
+            self._log('hold settle {:.2f} s capped at {:.2f} s ({:.1f} tau): '
+                      'i_peak {:.1f} A makes the regulator slow on {:.2f} ohm'
+                      .format(settle, cap, cap / tau_s, i_peak_a, rs_ohm))
+            settle = cap
+        return settle
+
+    def _capture_map(self, source):
+        """Name *source*'s channels for the next arm (channel firmware), and
+        keep them until _release_capture_map.  A no-op on packed firmware."""
+        self._release_capture_map()
+        if not self._capture_has_channels():
+            return
+        if source not in CAPTURE_CHANNELS:
+            raise SysidError('capture source {} has no channel equivalent on '
+                             'this firmware'.format(source))
+        pdo = _CaptureMap(self, CAPTURE_CHANNELS[source])
+        pdo.__enter__()
+        self._capture_pdo = pdo
+
+    def _release_capture_map(self):
+        pdo = getattr(self, '_capture_pdo', None)
+        self._capture_pdo = None
+        if pdo is not None:
+            pdo.__exit__(None, None, None)
+
+    def _pwm_period_s(self):
+        """Seconds per PWM period — the grid the ISR can record on."""
+        freq = self.scaling.get('pwm_freq_hz') if self.scaling else None
+        if not freq:
+            freq = float(self.node.sdo['Amp']['Frequency'].raw)
+        if freq <= 0:
+            raise SysidError('PWM frequency (0x3007,3) is 0 — cannot work out '
+                             'the capture buffer sample rate')
+        return 1.0 / freq
+
+    def _control_period_s(self):
+        """Seconds per control cycle.
+
+        Not the capture buffer's sample interval — see
+        _capture_record_interval_s, which measures that instead of deriving it.
+        """
+        ctl = self.scaling.get('control_hz') if self.scaling else None
+        if ctl:
+            return 1.0 / ctl
+        return PWM_PATTERNS_PER_CONTROL_CYCLE * self._pwm_period_s()
+
+    def _capture_record_interval_s(self):
+        """Seconds between capture records.
+
+        Read from 0x3004,7, which is the number of PWM periods the firmware
+        latched when the capture was armed, and cross-checked against a
+        decimated capture timed on the wall clock.  Both, not either:
+
+        * The published value is the authority.  Deriving the interval from the
+          decimation and the control rate was wrong on the first firmware that
+          shipped the buffer — pwm.c called logRecord() from two arms of the
+          ISR's pattern switch, so it took two records per control cycle and
+          every time constant fitted from one came out exactly 2x too long.
+          The host cannot see that from the waveform: the trace is still a
+          clean exponential, the fit quality is untouched, and on the P4-42 it
+          was found on the doubled answer landed within 1 % of the puck's own
+          configured lt, which reads as confirmation and is a coincidence.
+        * The timed run is kept anyway, because "the device publishes it" is a
+          claim about the device, and this whole measurement exists because a
+          derivation nobody checked was believed for months.  A disagreement is
+          reported and the published value is still used — timing over SDO is
+          the less trustworthy of the two, so it gets to raise a hand, not to
+          overrule.
+
+        Both come out of one armed capture: arming is what latches 0x3004,7, so
+        the timing run publishes the number it is checking.
+
+        Cached — it is a property of the firmware, and two seconds is too long
+        to spend more than once per session.
+        """
+        if getattr(self, '_record_interval_s', None):
+            return self._record_interval_s
+
+        pwm = self._pwm_period_s()
+        sdo = self.node.sdo
+        decimate = CAPTURE_RATE_DECIMATE or min(CAPTURE_DECIMATE_MAX, max(1, int(round(
+            CAPTURE_RATE_SECONDS / (CAPTURE_RATE_RECORDS * self._control_period_s())))))
+        calls = CAPTURE_RATE_RECORDS * decimate
+        expected_s = calls * self._control_period_s()
+
+        # Timed with the bridge switching, as every capture that uses the
+        # interval is.  The K64 slows its PWM interrupt 128x in IDLE (low
+        # power, k64/hal.c pwm_idle()), so an IDLE timing run measures a rate
+        # no measurement ever records at.  Mode 12 at zero volts restores it.
+        idle = int(sdo['ReadModeOfOperation'].raw) == MODE_IDLE
+
+        sdo[OD_CAPTURE_STATE[0]][OD_CAPTURE_STATE[1]].raw = CAPTURE_IDLE
+        self._capture_map(LOG_SRC_DQ)
+        sdo[OD_CAPTURE_RECORDS[0]][OD_CAPTURE_RECORDS[1]].raw = \
+            CAPTURE_RATE_RECORDS
+        sdo[OD_CAPTURE_DECIMATE[0]][OD_CAPTURE_DECIMATE[1]].raw = decimate
+        try:
+            if idle:
+                self._begin_injection()
+            started = time.monotonic()
+            sdo[OD_CAPTURE_STATE[0]][OD_CAPTURE_STATE[1]].raw = CAPTURE_COLLECT
+            published = int(
+                sdo[OD_CAPTURE_INTERVAL[0]][OD_CAPTURE_INTERVAL[1]].raw)
+            # Generous against the derived expectation, which is exactly the
+            # number under test: anything within a small multiple of it is a
+            # rate worth reporting, and beyond that the ISR is not running.
+            deadline = started + max(2.0, 5.0 * expected_s)
+            state = sdo[OD_CAPTURE_STATE[0]][OD_CAPTURE_STATE[1]]
+            while int(state.raw) != CAPTURE_FULL:
+                self._check_abort()
+                if time.monotonic() > deadline:
+                    raise SysidError(
+                        'the capture buffer never filled while its sample rate '
+                        'was being timed — the drive is not running its '
+                        'control loop, which is where records are written')
+            elapsed = time.monotonic() - started
+        finally:
+            if idle:
+                self.safe_stop()
+            sdo[OD_CAPTURE_STATE[0]][OD_CAPTURE_STATE[1]].raw = CAPTURE_IDLE
+            sdo[OD_CAPTURE_DECIMATE[0]][OD_CAPTURE_DECIMATE[1]].raw = 1
+            self._release_capture_map()
+
+        if published <= 0:
+            raise SysidError(
+                'the device published a capture interval of {} PWM periods '
+                '(0x3004,7) after a capture was armed.  That object is latched '
+                'at arm time, so a zero means this firmware does not maintain '
+                'it and no time base can be taken from it.'.format(published))
+
+        # The published figure already includes the decimation the capture was
+        # armed with — logArm() latches decimate * the PWM periods in a cycle
+        # — so it has to be brought back to a single record before it can be
+        # used for the undecimated captures the measurements take, or compared
+        # with the timed run below.
+        if published % decimate:
+            raise SysidError(
+                'the device published {} PWM periods per record (0x3004,7) for '
+                'a capture decimated by {}, which is not a whole number of '
+                'periods per control cycle.  That object is meant to be the '
+                'decimation times the periods in a control cycle, so this '
+                'firmware is not maintaining it as documented.'
+                .format(published, decimate))
+        periods_per_record = published // decimate
+
+        self._record_interval_s = periods_per_record * pwm
+        self._cross_check_capture_interval(elapsed, calls, pwm,
+                                           periods_per_record)
+
+        control = self._control_period_s()
+        self._log('capture records every {:.1f} us ({} PWM period{}, {:.2g} '
+                  'per {:.0f} us control cycle)'
+                  .format(self._record_interval_s * 1e6, periods_per_record,
+                          '' if periods_per_record == 1 else 's',
+                          control / self._record_interval_s, control * 1e6))
+        return self._record_interval_s
+
+    def _cross_check_capture_interval(self, elapsed, calls, pwm, published):
+        """Compare the timed interval with the one the device published.
+
+        Timing over SDO carries a positive bias of about 1 % — the polling loop
+        — which is far smaller than the half PWM period it would take to reach
+        the next point on the grid the ISR can record on, so rounding to that
+        grid absorbs it.  Anything left is a real disagreement.
+        """
+        timed_periods = (elapsed / calls) / pwm
+        nearest = max(1, int(round(timed_periods)))
+        if abs(timed_periods - nearest) > CAPTURE_RATE_TOLERANCE:
+            self._log(
+                'capture timing: WARNING — the timed interval works out at '
+                '{:.2f} PWM periods per record, which is not a whole number of '
+                'them.  {} records decimated by {} took {:.3f} s.  Either '
+                'something other than the PWM interrupt is pacing the buffer, '
+                'or the bus was slow enough to spoil the timing; the published '
+                '{} is being used.'
+                .format(timed_periods, CAPTURE_RATE_RECORDS,
+                        calls // CAPTURE_RATE_RECORDS, elapsed, published))
+            return
+        if nearest != published:
+            self.capture_interval_disagreement = nearest / float(published)
+            self._log(
+                'capture timing: WARNING — the device publishes {} PWM periods '
+                'per record (0x3004,7) but a timed capture measures {}, a '
+                'factor of {:.2f}.  Every time constant fitted from a capture '
+                'scales with this, so one of the two is putting a systematic '
+                'error straight into L — and 0x3004,7 is derived from the '
+                'decimation, so it cannot see how many times the ISR really '
+                'calls logRecord per control cycle, which is exactly how this '
+                'was wrong by two before.  The published value is being used; '
+                'confirm it on a scope before trusting an inductance.'
+                .format(published, nearest, nearest / float(published)))
+
+    def rpm_to_counts_per_s(self, rpm):
+        """Motor RPM → encoder counts/second."""
+        return int(round(rpm / 60.0 * self.scaling['enc_res']))
+
+    def estim_drag(self, kt_nm_per_a=None, ld_h=None, lq_h=None,
+                   current_a=None, accel_rad_s2=DRAG_ACCEL_RAD_S2,
+                   low_rpm=DRAG_LOW_RPM, top_rpm=DRAG_TOP_RPM,
+                   step_rpm=DRAG_STEP_RPM, repeats=DRAG_REPEATS,
+                   j_prior_kg_m2=None):
+        """J, B and Coulomb friction with no velocity loop in the way.
+
+        The velocity loop's gains are derived from J and B, so a measurement of
+        them that needs the loop to hold a speed is circular on a new motor.
+        Here the rotor is dragged instead: a d-axis HOLD aligns it, then DRAG
+        turns the field through a staircase of speeds in both directions and
+        the rotor follows on the magnetic spring.  Only the current loop runs,
+        and its gains come from R and L.
+
+        The data come over PDOs: TPDO4 streams, at every SYNC (1 kHz while
+        it runs), the control cycles, the sum of the rotor-frame iq over them
+        and the position, so the integral of the torque over each step is
+        exact however the SYNCs jitter; and RPDO4 steps the drag, target speed
+        then mode, with no SDO round trip in the way.  Both PDOs are put back
+        as they were found.  Each step's ramp and whole-revolution cruise is a
+        window, and dragfit.drag_fit_windows solves the integrated equation of
+        motion over each.  Torque is Kt iq corrected for
+        reluctance with *ld_h* and *lq_h* (per phase), which matters here
+        because the d current is the whole hold current; without them the PM
+        term alone is used and J reads high by about (Lq - Ld) id / psi.
+
+        The rotor-frame iq is only as good as the angle it is Parked with, and
+        with the whole hold current on d an angle error of e puts I sin(e)
+        into it: 50 mA per electrical degree at 3 A.  Two errors are always
+        there -- the electrical zero, a whole count of the encoder (0.6 deg on
+        a 7-pole-pair, 4096-count motor), and any skew between the encoder
+        and current samples, which grows with speed.  The first is a torque
+        offset of one sign in both directions, so it cancels in the mean of
+        the two Coulomb terms.  The second reads exactly as viscous friction.
+        Both scale with I and friction does not, so the staircase runs at
+        *current_a* and at half of it, and B is extrapolated to zero current;
+        J and Tc are averaged.  The angle errors come back as diagnostics.
+
+        The spring is damped from the first arm, and the damping and the
+        acceleration are both sized from its frequency, which needs a J:
+        *j_prior_kg_m2*, else the drive's stored one, else DRAG_J_PRIOR_KG_M2.
+        It only sizes the excitation -- the result does not depend on it --
+        and the full-current run uses the J the half-current run found.
+
+        Returns ``j_kg_m2``, ``b_nm_s_per_rad``, ``a_nm`` (Tc, the mean of the
+        two directions), ``zero_error_deg`` and ``skew_us`` (the angle errors
+        removed), and the per-current ``runs`` behind them.
+        """
+        s = self.refresh_scaling()
+        try:
+            self._inject_read(OD_STREAM_SOURCE)
+        except Exception:
+            raise SysidError('this firmware has no drag stream (0x3004,9); '
+                             'update it to measure by drag')
+        volts = self._has_volt_stream()
+        kt_drive = s['kt_device_mnm_per_a'] / 1000.0
+        # Sizes the spring until the flux is in; the torque's Kt is settled
+        # once both runs are.
+        kt_size = kt_nm_per_a or kt_drive
+        if kt_size <= 0:
+            if not volts:
+                raise SysidError('the drag fit needs Kt to turn iq into '
+                                 'torque, and this firmware cannot measure '
+                                 'it (no 0x3004,13)')
+            kt_size = DRAG_KT_PRIOR_NM_PER_A
+        if ld_h is None or lq_h is None:
+            self._log('Drag: no Ld/Lq, so no reluctance correction -- J will '
+                      'read high on a salient motor')
+        i_hi = current_a or DRAG_CURRENT_FRACTION * s['i_peak_ma'] / 1000.0
+        pp = s['poles'] // 2
+        kt_pk = kt_size / math.sqrt(2.0)
+        rad_per_ct = 2.0 * math.pi / s['enc_res']
+
+        def fit_run(i_hold, windows, kt):
+            def torque_of(iq):
+                return dragfit.drag_torque(iq, i_hold, kt, pp, ld_h, lq_h)
+
+            integrated = [dragfit.stream_window(w, cyc, rad_per_ct, torque_of)
+                          for w, cyc in windows]
+            try:
+                fit = dragfit.drag_fit_windows(integrated, DRAG_MIN_SPEED_RAD_S)
+            except ValueError as exc:
+                raise SysidError('the drag captures at {:.2f} A could not be '
+                                 'fitted: {}'.format(i_hold, exc))
+            if fit['tc_pos_nm'] is None or fit['tc_neg_nm'] is None:
+                raise SysidError('the drag fit at {:.2f} A has windows in one '
+                                 'direction only'.format(i_hold))
+            fit['current_a'] = i_hold
+            fit['cycle_s'] = float(np.mean([cyc for _, cyc in windows]))
+            return fit
+        j_prior = j_prior_kg_m2 or self._stored_inertia_kg_m2()
+        if not j_prior:
+            j_prior = DRAG_J_PRIOR_KG_M2
+            self._log('Drag: no stored J; sizing the drag for a {:.1e} kg.m^2 '
+                      'rotor'.format(j_prior))
+        accel = accel_rad_s2
+        taken = []
+        # The low current first: its spring is the weaker, so a pull-out
+        # shows there and the halved acceleration serves both runs.
+        for i_hold in (0.5 * i_hi, i_hi):
+            for attempt in range(DRAG_RETRIES + 1):
+                try:
+                    try:
+                        windows, info, cruises = self._drag_staircase(
+                            i_hold, kt_pk, j_prior, accel, low_rpm, top_rpm,
+                            step_rpm, repeats)
+                    except (SysidError, _DragPulledOut) as exc:
+                        # A drive that faulted (a supply browning out) is
+                        # not a rotor that pulled out: say which.
+                        self._raise_if_faulted('the drag at {:.2f} A'.format(
+                            i_hold), exc)
+                        raise
+                    break
+                except _DragPulledOut as exc:
+                    if attempt == DRAG_RETRIES:
+                        raise SysidError(
+                            'the rotor pulled out of step at {:.2f} A and '
+                            '{:.0f} rad/s^2 even after {} halvings ({}).  '
+                            'Raise the drag current or check for a binding '
+                            'load.'.format(i_hold, accel, attempt, exc))
+                    self._log('Drag: pulled out at {:.2f} A, {:.0f} rad/s^2 '
+                              '({}); halving'.format(i_hold, accel, exc))
+                    # Halve what the steps ran at, which the spring may have
+                    # already set below the ceiling.
+                    ran = getattr(exc, 'accel_rad_s2', None)
+                    accel = 0.5 * (ran if ran else accel)
+            taken.append((i_hold, windows, info, cruises))
+            # Only the next run's sizing needs this J.
+            fit = fit_run(i_hold, windows, kt_nm_per_a or kt_size)
+            if fit['j_kg_m2'] > 0:
+                self._log('Drag: {:.2f} A fits J {:.2e} kg.m^2 (sized for '
+                          '{:.2e})'.format(i_hold, fit['j_kg_m2'], j_prior))
+                j_prior = fit['j_kg_m2']
+
+        bemf = None
+        cruises = [c for t in taken for c in t[3]]
+        if cruises:
+            delay = self._output_delay_s()
+            dl = (lq_h - ld_h) if ld_h is not None and lq_h is not None \
+                else 0.0
+            try:
+                bemf = dragfit.drag_flux_fit(cruises, delay, dl)
+            except ValueError as exc:
+                self._log('Drag: no flux from the cruises: {}'.format(exc))
+            else:
+                bemf['delay_s'] = delay
+                bemf['kt_nm_per_a'] = dragfit.kt_from_flux(bemf['psi_wb'], pp)
+                self._log('Drag: back-EMF over {} cruises: psi = {:.4e} Wb, '
+                          'Kt = {:.2f} mNm/A (drive has {:.2f}), Ld = {:.1f} '
+                          'uH, residual {:.1f} mV, output delay {:.1f} us'
+                          .format(bemf['cruises'], bemf['psi_wb'],
+                                  bemf['kt_nm_per_a'] * 1e3, kt_drive * 1e3,
+                                  bemf['ld_h'] * 1e6,
+                                  bemf['residual_v'] * 1e3, delay * 1e6))
+        if kt_nm_per_a:
+            kt_source = 'given'
+        elif bemf is not None and bemf['kt_nm_per_a'] > 0:
+            kt_nm_per_a, kt_source = bemf['kt_nm_per_a'], 'back-EMF'
+        elif kt_drive > 0:
+            kt_nm_per_a, kt_source = kt_drive, 'drive'
+            self._log('Drag: using the drive\'s Kt, {:.2f} mNm/A'
+                      .format(kt_drive * 1e3))
+        else:
+            raise SysidError('the drag fit needs Kt to turn iq into torque, '
+                             'and the back-EMF gave none')
+        kt_pk = kt_nm_per_a / math.sqrt(2.0)
+
+        runs = []
+        for i_hold, windows, info, _ in taken:
+            fit = fit_run(i_hold, windows, kt_nm_per_a)
+            fit['spring'] = info
+            self._log('Drag: {:.2f} A: J = {:.4e} kg.m^2, B = {:.3e} '
+                      'N.m.s/rad, Tc = {:+.5f} / {:+.5f} N.m, {} steps'.format(
+                          i_hold, fit['j_kg_m2'], fit['b_nm_s_per_rad'],
+                          fit['tc_pos_nm'], fit['tc_neg_nm'], fit['segments']))
+            runs.append(fit)
+
+        lo, hi = runs
+        di = hi['current_a'] - lo['current_a']
+        slope = (hi['b_nm_s_per_rad'] - lo['b_nm_s_per_rad']) / di
+        b = lo['b_nm_s_per_rad'] - slope * lo['current_a']
+        j = float(np.mean([r['j_kg_m2'] for r in runs]))
+        a = float(np.mean([0.5 * (r['tc_pos_nm'] + r['tc_neg_nm'])
+                           for r in runs]))
+        # Offset e = (Tc+ - Tc-)/2 = kt_pk I sin(zero error); skew from the
+        # B slope, kt_pk pp tau per amp.
+        zero = float(np.mean([math.degrees(math.asin(max(-1.0, min(1.0,
+                     0.5 * (r['tc_pos_nm'] - r['tc_neg_nm'])
+                     / (kt_pk * r['current_a'])))))
+                     for r in runs]))
+        skew_us = slope / (kt_pk * pp) * 1e6
+        result = {'kt_nm_per_a': kt_nm_per_a, 'kt_source': kt_source,
+                  'bemf': bemf, 'j_kg_m2': j,
+                  'b_nm_s_per_rad': b, 'a_nm': a,
+                  'zero_error_deg': zero, 'skew_us': skew_us,
+                  'accel_rad_s2': min(d['accel_rad_s2'] for r in runs
+                                      for d in r['spring']),
+                  'runs': runs}
+        self._log('Drag: J = {:.4e} kg.m^2 ({:.1f} g.cm^2), B = {:.3e} '
+                  'N.m.s/rad, Tc = {:.5f} N.m  (removed: electrical zero '
+                  '{:+.2f} deg, encoder/current skew {:+.1f} us)'.format(
+                      j, fits.kgm2_to_gcm2(j), b, a, zero, skew_us))
+        self.last_estim_drag = result
+        return result
+
+    def _stored_inertia_kg_m2(self):
+        """The drive's Calibration.j in kg.m^2, or None when it has none."""
+        try:
+            raw = int(self.node.sdo['Calibration']['j'].raw)
+        except Exception:
+            return None
+        # 32768 raw per g.cm^2, 1e-7 kg.m^2 per g.cm^2.
+        j = raw / 32768.0 * 1e-7
+        # A drive that was never identified holds whatever its defaults
+        # were, and a J sized off by orders of magnitude sizes the damping
+        # to nothing.  From a watch motor to a large servo is plenty.
+        if not DRAG_J_PLAUSIBLE[0] <= j <= DRAG_J_PLAUSIBLE[1]:
+            if raw > 0:
+                self._log('Drag: the stored J, {:.1e} kg.m^2, is not a '
+                          'rotor\'s; ignoring it'.format(j))
+            return None
+        return j
+
+    def _drag_staircase(self, i_hold_a, kt_pk, j_prior, accel_rad_s2,
+                        low_rpm, top_rpm, step_rpm, repeats=1):
+        """Run the staircase once, streaming.
+
+        Returns ``(windows, info, cruises)``: windows are ``(frames,
+        cycle_s)``, one per step: the stream's raw ``(cycles, iq_sum_ma,
+        position)`` frames from the one before the step's command to the end
+        of its cruise, and the control cycle there, measured against the
+        host's clock (_stream_cycle_s); info has, per direction, the spring's
+        ``spring_hz`` (from *j_prior*), the friction's ``load_deg`` and the
+        ``accel_rad_s2`` and ``damp_q8`` the steps ran at; cruises are
+        dragfit.drag_cruise's means over each step's cruise, with its
+        ``current_a`` and ``sign``, when the firmware streams the voltage
+        (empty when it does not).
+        """
+        s = self.scaling
+        cpr = s['enc_res']
+        pp = s['poles'] // 2
+        rad_per_ct = 2.0 * math.pi / cpr
+        dt_cycle = self._capture_record_interval_s()
+        levels = list(range(int(low_rpm), int(top_rpm) + 1, int(step_rpm)))
+        if len(levels) < 2:
+            raise SysidError('the drag staircase needs two speeds or more')
+        path = (levels[1:] + levels[-2::-1]) * repeats
+        spans = []
+        info = []
+
+        # Stiffness per mechanical radian at zero load angle, and the
+        # damping for the spring it makes with the prior J.  The derivative
+        # the firmware damps with has its corner at rate/16.
+        k0 = kt_pk * pp * i_hold_a
+        corner = 1.0 / (16.0 * dt_cycle)
+
+        def damp_q8(wn):
+            return min(0xFFFF, int(round(
+                256.0 * 2.0 * DRAG_DAMPING_RATIO * corner / wn)))
+
+        def acc_cts(accel):
+            return max(1, int(round(accel / rad_per_ct)))
+
+        damp = damp_q8(math.sqrt(k0 / j_prior))
+
+        def ramp_s(rpm_from, rpm_to, accel):
+            return abs(rpm_to - rpm_from) * 2.0 * math.pi / 60.0 / accel
+
+        def check(what):
+            state = self._inject_read(OD_INJECT_STATE)
+            if state == INJ_ST_TRIPPED:
+                raise _DragPulledOut(what)
+            if state != INJ_ST_INJECTING:
+                raise SysidError('the drag reports state {} {}'.format(
+                    state, what))
+
+        with (_VoltStream(self) if self._has_volt_stream()
+              else contextlib.nullcontext()) as vstream, \
+                _Stream(self, LOG_SRC_IQR_POS) as stream, \
+                _DragRpdo(self) as rpdo:
+            try:
+                self._begin_injection()
+                self._inject_arm(INJ_HOLD, INJ_MAX_MS, {
+                    OD_INJECT_CURRENT: int(round(i_hold_a * 1000.0)),
+                    OD_INJECT_THETA: LS_THETA_E, OD_INJECT_AXIS: INJ_AXIS_D})
+                self._stream_sleep(self._inject_settle_s() + DRAG_SETTLE_S)
+                for sign in (1, -1):
+                    self._check_abort()
+                    # The ramps to and from rest by SDO, with no data taken.
+                    start = min(accel_rad_s2, DRAG_START_ACCEL_RAD_S2)
+                    self._inject_arm(INJ_DRAG, INJ_MAX_MS, {
+                        OD_INJECT_DRAG_VEL: self.rpm_to_counts_per_s(
+                            sign * levels[0]),
+                        OD_INJECT_DRAG_ACC: acc_cts(start),
+                        OD_INJECT_DRAG_DAMP: damp})
+                    self._stream_sleep(ramp_s(0, levels[0], start)
+                                       + DRAG_SETTLE_S)
+                    try:
+                        check('reaching {} rpm'.format(sign * levels[0]))
+                    except _DragPulledOut as exc:
+                        exc.accel_rad_s2 = start
+                        raise
+
+                    # The friction's load angle, which takes that much out of
+                    # the budget and softens the spring by its cosine.
+                    m = stream.mark()
+                    self._stream_sleep(DRAG_LOAD_S)
+                    iq = stream.mean_iq_a(m, stream.mark())
+                    load = math.degrees(math.asin(
+                        min(1.0, abs(iq) / i_hold_a)))
+                    wn = math.sqrt(k0 * math.cos(math.radians(load))
+                                   / j_prior)
+                    room = math.radians(max(DRAG_LOAD_BUDGET_DEG - load, 1.0))
+                    accel = min(accel_rad_s2,
+                                room * wn * wn / (DRAG_OVERSHOOT * pp))
+                    damp = damp_q8(wn)
+                    info.append({'spring_hz': wn / (2.0 * math.pi),
+                                 'load_deg': load, 'accel_rad_s2': accel,
+                                 'damp_q8': damp})
+                    self._log('Drag: {:+.0f} rpm: friction takes {:.1f} deg; '
+                              'spring {:.1f} Hz for J {:.2e}; damping {}/256, '
+                              'stepping at {:.0f} rad/s^2'.format(
+                                  sign * levels[0], load,
+                                  wn / (2.0 * math.pi), j_prior, damp, accel))
+                    # Staged now, latched by each step's arm.
+                    self._inject_write(OD_INJECT_DRAG_ACC, acc_cts(accel))
+                    self._inject_write(OD_INJECT_DRAG_DAMP, damp)
+
+                    now = levels[0]
+                    for rpm in path:
+                        self._check_abort()
+                        cruise = max(DRAG_CRUISE_S,
+                                     DRAG_CRUISE_REVS * 60.0 / rpm)
+                        m = stream.mark()
+                        rpdo.go(self.rpm_to_counts_per_s(sign * rpm))
+                        ramp = ramp_s(now, rpm, accel)
+                        self._stream_sleep(ramp + cruise)
+                        try:
+                            check('stepping {} -> {} rpm'.format(sign * now,
+                                                                 sign * rpm))
+                        except _DragPulledOut as exc:
+                            exc.accel_rad_s2 = accel
+                            raise
+                        # The RPDO has no answer; the field speed is the
+                        # proof it was taken.
+                        field = self._inject_read_signed32(OD_INJECT_DRAG_NOW)
+                        want = self.rpm_to_counts_per_s(sign * rpm)
+                        if abs(field - want) > 0.02 * abs(want) + 1:
+                            raise SysidError(
+                                'the drag RPDO for {} rpm was not taken: the '
+                                'field turns at {} counts/s, not {}'.format(
+                                    sign * rpm, field, want))
+                        spans.append((max(m - 1, 0), stream.mark(), sign,
+                                      ramp))
+                        now = rpm
+                    self._inject_arm(INJ_DRAG, INJ_MAX_MS, {
+                        OD_INJECT_DRAG_VEL: 0,
+                        OD_INJECT_DRAG_ACC: acc_cts(start)})
+                    self._stream_sleep(ramp_s(now, 0, start) + DRAG_SETTLE_S)
+                    check('returning to rest')
+            finally:
+                self.safe_stop()
+            frames = list(stream.frames)
+            vframes = list(vstream.frames) if vstream is not None else None
+        # The device's clock is disciplined to the SYNC, which a USB adapter
+        # may pace a percent off, and trimmed in steps while it chases it:
+        # each window is timed by the clock around it, not the run's mean.
+        reach = int(DRAG_CLOCK_SPAN_S * STREAM_SYNC_HZ)
+        windows = []
+        ppm = []
+        for a, b, _, _ in spans:
+            cyc = self._stream_cycle_s(frames[max(a - reach, 0):b + reach],
+                                       dt_cycle)
+            ppm.append((cyc / dt_cycle - 1.0) * 1e6)
+            windows.append(([f[:3] for f in frames[a:b]], cyc))
+        self._log('Drag: the control cycle ran {:+.0f} to {:+.0f} ppm off '
+                  'nominal ({} frames)'.format(min(ppm), max(ppm),
+                                               len(frames)))
+        cruises = []
+        if vframes is not None:
+            pair = dragfit.pair_frames(
+                [np.nan if f[3] is None else f[3] for f in frames],
+                [np.nan if v[2] is None else v[2] for v in vframes],
+                VOLT_PAIR_S)
+            for (a, b, sign, ramp), (w, cyc) in zip(spans, windows):
+                volts = [vframes[j][:2] if j >= 0 else None
+                         for j in pair[a:b]]
+                cr = dragfit.drag_cruise(
+                    w, volts, (ramp + DRAG_CRUISE_SETTLE_S) / cyc, cyc,
+                    rad_per_ct, cpr, pp, s['u_max_v'])
+                if cr is not None:
+                    cr.update(current_a=i_hold_a, sign=sign)
+                    cruises.append(cr)
+            self._log('Drag: {} of {} voltage frames paired; {} cruises of '
+                      '{} usable for the flux'.format(
+                          int(np.sum(pair >= 0)), len(vframes), len(cruises),
+                          len(spans)))
+        return windows, info, cruises
+
+    def _output_delay_s(self):
+        """The commutation latency: from the samples a request is computed
+        from to the middle of its application.  The pipeline part the drive
+        computes (0x3013,10, 0.1 us) plus 0x3013,5 (us); firmware older than
+        0x3013,10 has the pipeline part in 0.01 PWM period at 0x3013,7.  0 when
+        the drive has none."""
+        try:
+            us = self._inject_read_signed(OD_ENC_LATENCY_US)
+        except Exception:
+            return 0.0
+        try:
+            pipe = self._inject_read_signed(OD_ENC_LATENCY_PIPE)
+        except Exception:
+            pipe = 0
+        if pipe > 0:
+            return pipe * 1e-7 + us * 1e-6
+        try:
+            cp = self._inject_read_signed(OD_ENC_LATENCY_CP)
+        except Exception:
+            return 0.0
+        return cp / 100.0 / self.scaling['pwm_freq_hz'] + us * 1e-6
+
+    def _inject_read_signed32(self, od):
+        value = self._inject_read(od) & 0xFFFFFFFF
+        return value - (1 << 32) if value & 0x80000000 else value
+
+    def _stream_cycle_s(self, frames, nominal_s):
+        """The control cycle, from the stream's cycle count against the
+        host's receive times.
+
+        The device's clock is the HSI, trimmed by the clock discipline to the
+        SYNC -- which is only as good as whatever paces it: a USB adapter ran
+        a nominal 1 kHz at 1.0096 ms on the bench, and the discipline chased
+        it by thousands of ppm in a second and a half.  Every time in the fit
+        is counted in its cycles, and J scales with the cycle squared.  A fit
+        of the host's receive times to the unwrapped count over *frames* is
+        good to the timestamp jitter over their span (~30 us a frame, ~15 ppm
+        over 0.6 s), so it is used whenever it lands within 3 % of nominal.
+        """
+        if len(frames) < 100:
+            return nominal_s
+        f = np.asarray([(c, ts if ts is not None else np.nan)
+                        for c, _, _, ts in frames], float)
+        cyc = np.concatenate(([0], np.cumsum(
+            np.diff(f[:, 0]).astype(np.int64) & 0xFFFF)))
+        ts = f[:, 1]
+        ok = np.isfinite(ts)
+        # Only while the count runs: it stands still between injections.
+        moving = np.concatenate(([False], np.diff(cyc) > 0)) & ok
+        if moving.sum() < 100 or np.ptp(cyc[moving]) == 0:
+            return nominal_s
+        slope = float(np.polyfit(cyc[moving].astype(float), ts[moving], 1)[0])
+        ppm = (slope / nominal_s - 1.0) * 1e6
+        if abs(ppm) > 3e4:
+            self._log('Drag: the stream\'s clock reads {:+.0f} ppm off '
+                      'nominal; not believed, using nominal'.format(ppm))
+            return nominal_s
+        return slope

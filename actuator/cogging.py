@@ -236,11 +236,11 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
                 raise SysidError(
                     'the speed at {:+.0f} rpm is not steady (10 ms means '
                     '{}): stick-slip, the velocity loop cannot hold it -- '
-                    'run the friction feed-forward first, or leave cogging '
-                    'out on a slotless motor'.format(
+                    '{}, or leave cogging out on a slotless motor'.format(
                         sgn * rpm, '{:.0f} +- {:.0f} rpm'.format(
                             spread[0] * k, spread[1] * k) if k else
-                        '{:.3f} +- {:.3f} counts/cycle'.format(*spread)))
+                        '{:.3f} +- {:.3f} counts/cycle'.format(*spread),
+                        _stick_slip_hint(dev)))
             fr, bad = clean_frames(fr, res)
             if bad > MAX_BAD_FRAC * (len(fr) + bad):
                 raise SysidError('{} of {} stream frames at {:+.0f} rpm were '
@@ -270,6 +270,12 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
 # ---------------------------------------------------------------------------
 # Analysis (pure: tested on synthetic and recorded captures)
 # ---------------------------------------------------------------------------
+def _wrap16(d):
+    """A difference of the stream's position, which is 16 bits (0x3004,12
+    is I16), into -32768..32767."""
+    return np.mod(np.asarray(d) + 2 ** 15, 2 ** 16) - 2 ** 15
+
+
 def clean_frames(fr, res):
     """Drop the stream frames that cannot be right: (cycle count mod 2^16,
     iq sum, position) rows.  A frame is kept when its cycle count advances
@@ -284,12 +290,12 @@ def clean_frames(fr, res):
         return fr, 0
     dc = np.mod(np.diff(fr[:, 0]), 65536)
     step = float(np.median(dc[dc > 0])) if (dc > 0).any() else 1.0
-    dp = np.mod(np.diff(fr[:, 2]) + 2 ** 31, 2 ** 32) - 2 ** 31
+    dp = _wrap16(np.diff(fr[:, 2]))
     ok = dc > 0
     rate = float(np.median(np.abs(dp[ok]) / dc[ok])) if ok.any() else 0.0
     def follows(a, b):
         n = (b[0] - a[0]) % 65536
-        d = (b[2] - a[2] + 2 ** 31) % 2 ** 32 - 2 ** 31
+        d = _wrap16(b[2] - a[2])
         return 0 < n <= MAX_GAP_X * step and \
             abs(d) <= POS_JUMP_X * rate * n + 4 + res / 1024.0
 
@@ -306,6 +312,20 @@ def clean_frames(fr, res):
     return fr[keep], len(fr) - len(keep)
 
 
+def _stick_slip_hint(dev):
+    """What to do about stick-slip, by the Coulomb ff (0x2381,3) the
+    friction step, just before, left."""
+    try:
+        ff = float(steptest.read(dev, 'vel_tc_ff'))
+    except Exception:       # noqa: BLE001 -- firmware without the ff
+        return 'this firmware has no friction feed-forward (0x2381,3)'
+    if ff > 0:
+        return ('even with the Coulomb ff at {:.3g}/1000: check the drag\'s '
+                'Tc (0x3011,17)'.format(ff))
+    return ('the Coulomb ff (0x2381,3) is off: run Friction calibration '
+            'first (the drag, then the ff on its Tc)')
+
+
 def speed_spread(fr, n=STICK_SLIP_BIN):
     """(mean, std) of the speed in counts per control cycle over bins of
     *n* stream frames (10 ms at 1 kHz), or None for too short a capture.
@@ -316,7 +336,10 @@ def speed_spread(fr, n=STICK_SLIP_BIN):
         return None
     idx = np.arange(m + 1) * n
     dc = np.mod(np.diff(fr[idx, 0]), 65536)
-    dp = np.mod(np.diff(fr[idx, 2]) + 2 ** 31, 2 ** 32) - 2 ** 31
+    # Unwrapped frame by frame first: a bin's move can pass half the 16-bit
+    # range at speed, a frame's cannot.
+    pos = np.r_[0.0, np.cumsum(_wrap16(np.diff(fr[:, 2])))]
+    dp = np.diff(pos[idx])
     ok = dc > 0
     if ok.sum() < 4:
         return None

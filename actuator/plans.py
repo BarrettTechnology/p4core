@@ -13,6 +13,10 @@ whose results differ unit to unit and that the CSV does not carry.
                                offset and its drive-on baseline
               winding          electrical zero and winding order
               runout           the magnet's runout table
+              friction         friction calibration: the drag's J, B and
+                               Tc (the velocity gains rescaled to its J),
+                               then the Coulomb feed-forward on that Tc:
+                               before cogging, whose slow spins it carries
               cogging          the cogging feed-forward bins
 
 Slope and fold belong to the board as much as bias and gain do: the CSV
@@ -33,7 +37,7 @@ from . import prereqs, steps
 
 FINAL = ('save', 'export')
 ACTUATOR = ('encoder', 'bias', 'gain', 'slope', 'fold', 'winding', 'runout',
-            'cogging')
+            'friction', 'cogging')
 
 #: name -> (menu title, steps)
 PLANS = {
@@ -42,7 +46,9 @@ PLANS = {
 
 #: Other names the apps' command lines take for a step.
 ALIASES = {'enczero': 'winding', 'ezero': 'winding', 'encoder-test': 'encoder',
-           'encdir': 'winding', 'runout-table': 'runout'}
+           'encdir': 'winding', 'runout-table': 'runout',
+           'drag': 'friction', 'friction-ff': 'friction',
+           'friction_ff': 'friction'}
 
 
 class PlanError(ValueError):

@@ -6,6 +6,7 @@ drive refuses a 0x6060 write outside Operation Enabled (abort 0x08000022):
 enable first, then pick the mode.
 """
 import struct
+import time
 
 
 # ControlWord commands
@@ -146,3 +147,113 @@ def describe_error(code):
     """'0x8110 CAN overrun: ...' -- the code and what it means, if known."""
     text = ERROR_CODES.get(code)
     return '{:#06x}{}'.format(code, ' ' + text if text else '')
+
+
+# ---------------------------------------------------------------------------
+# Enable, with the reason when the drive refuses
+# ---------------------------------------------------------------------------
+#: StatusWord (0x6041) bits.
+SW_FAULT = 0x0008
+SW_STATE_MASK = 0x006F
+SW_OPERATION_ENABLED = 0x0027
+#: How long the fault reset gets to leave FAULT, s (the state machine runs
+#: on the 1 kHz tick).
+FAULT_RESET_S = 0.05
+#: 0x1001 error register bits (CiA 301 7.5.2.2).
+ERROR_REGISTER_BITS = ((0x01, 'generic'), (0x02, 'current'),
+                       (0x04, 'voltage'), (0x08, 'temperature'),
+                       (0x10, 'communication'), (0x20, 'device profile'),
+                       (0x80, 'manufacturer'))
+_STATES = ((0x4F, 0x00, 'Not Ready to Switch On'),
+           (0x4F, 0x40, 'Switch On Disabled'),
+           (0x6F, 0x21, 'Ready to Switch On'),
+           (0x6F, 0x23, 'Switched On'),
+           (0x6F, 0x27, 'Operation Enabled'),
+           (0x6F, 0x07, 'Quick Stop Active'),
+           (0x4F, 0x0F, 'Fault Reaction Active'),
+           (0x4F, 0x08, 'Fault'))
+
+
+class EnableRefused(RuntimeError):
+    """The drive would not reach Operation Enabled; the message says why
+    (diagnose())."""
+
+
+def state_name(sw):
+    """The CiA 402 state a StatusWord value reports."""
+    for mask, value, name in _STATES:
+        if sw & mask == value:
+            return name
+    return 'unknown state'
+
+
+def _upload_int(node, index, sub, size):
+    try:
+        data = bytes(node.sdo.upload(index, sub))
+    except Exception:       # noqa: BLE001 -- a diagnosis reads what it can
+        return None
+    return int.from_bytes(data[:size].ljust(size, b'\0'), 'little')
+
+
+def statusword(node):
+    """0x6041, or None when it cannot be read."""
+    return _upload_int(node, 0x6041, 0, 2)
+
+
+def diagnose(node):
+    """What the drive says about its state: the StatusWord and its state,
+    the last error (0x603F) by name, the error register (0x1001) and, when
+    it differs, the newest 0x1003 entry.  For an error message; never
+    raises."""
+    parts = []
+    sw = statusword(node)
+    if sw is not None:
+        parts.append('StatusWord {:#06x} ({})'.format(sw, state_name(sw)))
+    code = _upload_int(node, 0x603F, 0, 2)
+    if code:
+        parts.append('error ' + describe_error(code))
+    reg = _upload_int(node, 0x1001, 0, 1)
+    if reg:
+        parts.append('error register {:#04x} ({})'.format(
+            reg, ', '.join(n for b, n in ERROR_REGISTER_BITS if reg & b)))
+    hist = _upload_int(node, 0x1003, 1, 4)
+    if hist and hist & 0xFFFF != code:
+        parts.append('newest in 0x1003 ' + describe_error(hist & 0xFFFF))
+    return '; '.join(parts) or 'the drive did not answer'
+
+
+def _refused(node, what, why, exc=None):
+    return EnableRefused('{} refused ({}): {}{}'.format(
+        what, why, diagnose(node),
+        '' if exc is None else ' [{}]'.format(exc)))
+
+
+def enable(node, what='enable', sleep=time.sleep):
+    """Fault reset, Shutdown, Enable Operation over SDO, each refusal
+    explained: a fault that the reset cannot clear (its cause is still
+    there; the firmware acks 0x80 and stays in FAULT, and the Shutdown
+    after it aborts 0x08000022) or one that trips on enable raises
+    EnableRefused with diagnose()'s reading, not a bare SDO abort."""
+    cw = node.sdo['ControlWord']
+    try:
+        cw.raw = CLEAR_FAULT
+    except Exception as exc:     # noqa: BLE001 -- explained, then raised
+        raise _refused(node, what, 'the fault reset', exc) from exc
+    sw = statusword(node)
+    end = time.monotonic() + FAULT_RESET_S
+    while sw is not None and sw & SW_FAULT and time.monotonic() < end:
+        sleep(0.005)
+        sw = statusword(node)
+    if sw is not None and sw & SW_FAULT:
+        raise _refused(node, what, 'the fault persists after a reset: '
+                       'clear its cause first')
+    for word, step in ((SHUTDOWN, 'Shutdown'),
+                       (OP_ENABLED, 'Enable Operation')):
+        try:
+            cw.raw = word
+        except Exception as exc:     # noqa: BLE001 -- explained, then raised
+            raise _refused(node, what, step, exc) from exc
+    sw = statusword(node)
+    if sw is not None and sw & SW_FAULT:
+        raise _refused(node, what, 'faulted on enable')
+    return sw

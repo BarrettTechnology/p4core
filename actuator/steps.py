@@ -38,11 +38,11 @@ import math
 import time
 import traceback
 
-from . import cogging, commission, encoder, loops, pipeline
+from . import cogging, commission, encoder, friction, loops, pipeline, steptest
 from .commission import Limits, SysidError, drive_units, write_od
 from .drivecal import CalError
 from p4core import firmware
-from p4core.calibrate import read_friction, read_kt
+from p4core.calibrate import rated_torque_mnm, read_friction, read_kt
 
 
 class StepFailed(SysidError):
@@ -128,6 +128,16 @@ def _p_runout(dev):
     return '{}, bins {}'.format('on' if encoder.comp_active(dev) else 'off',
                                 ', '.join('k={}'.format(k) for k in ks) or
                                 'none')
+
+
+def _p_friction(dev):
+    out = 'J {:.3f} g.cm^2'.format(float(_cal(dev, 'j')) / 32768.0)
+    f = read_friction(dev.node)
+    if f is not None and f[0] > 0:
+        out += ', Tc {:.2f} mNm'.format(f[0])
+    if firmware.has(dev.node, 'friction_ff'):
+        out += ', Tc ff {:.3g}/1000'.format(steptest.read(dev, 'vel_tc_ff'))
+    return out
 
 
 def _p_cogging(dev):
@@ -348,7 +358,8 @@ class Session:
             elif key == 'j_kg_m2':
                 j = float(_cal(self.dev, 'j')) / 32768.0 * 1e-7
                 if j <= 0:
-                    raise StepFailed('the drive has no J: run Inertia')
+                    raise StepFailed('the drive has no J: run Back-EMF or Friction '
+                                     'calibration')
                 v['j_kg_m2'] = j
             elif key == 'coast':
                 # No coast this session: the drag's J prior is the drive's.
@@ -361,22 +372,6 @@ class Session:
                                                        s['v_nom'])
             else:
                 raise KeyError(key)
-
-    def need_friction(self):
-        """The drag's Tc/B: this session's, or the drive's (0x3011,17-18)."""
-        v = self.values
-        if v.get('tc_nm') is not None:
-            return
-        f = read_friction(self.dev.node)
-        if f is None:
-            raise StepFailed('this firmware stores no Tc (0x3011,17, stm32 '
-                             '898910f): run Inertia + friction (drag) in this '
-                             'session')
-        if f[0] <= 0:
-            raise StepFailed('the drive has no Tc: run Inertia + friction '
-                             '(drag)')
-        v['tc_nm'], v['b_nm_s_per_rad'] = f[0] / 1e3, f[1] / 1e3
-        self.ctx['friction_from_drive'] = True
 
     def stage(self, fn, limits=None):
         fn(self.dev, limits or self.limits, self.reboot, self.rep)
@@ -817,6 +812,70 @@ def _r_runout(s):
     return detail
 
 
+def _top_rpm(s):
+    """The PP moves' top speed: this session's (p4sysid's speed step), under
+    --max-rpm; None leaves it to the drive's 0x6080."""
+    top = s.values.get('top_speed_rpm')
+    if s.limits.max_speed_rpm:
+        top = min(top or s.limits.max_speed_rpm, s.limits.max_speed_rpm)
+    return top
+
+
+#: The drag's J against the one the velocity loop was designed on: a
+#: change past this rescales its Kp/Ki (_rescale_for_j).
+J_RESCALE_MIN = 1e-3
+
+
+def _rescale_for_j(s, j_was, j):
+    """The velocity PI's torque per rad/s of error was designed for *j_was*
+    (the coast's, or the CSV's): the same crossover on the drag's *j* takes
+    Kp and Ki x j / j_was.  The position loop commands velocity and does not
+    care."""
+    if not j_was or not j or abs(j / j_was - 1) < J_RESCALE_MIN:
+        return None
+    k = j / j_was
+    for key in ('vel_kp', 'vel_ki'):
+        g = steptest.read(s.dev, key)
+        if g:
+            steptest.write(s.dev, key, g * k)
+    s.log('friction: velocity Kp/Ki x {:.4f}: J {:.4g} -> {:.4g} '
+          'g.cm^2'.format(k, j_was * 1e7, j * 1e7))
+    return k
+
+
+def _r_friction(s):
+    """Friction calibration: the drag (J, B and Coulomb Tc, with the rotor
+    on a rotating field), then the Coulomb feed-forward 0x2381,3 on its Tc.
+    After the loops: the ff's PP moves need them, and they were designed on
+    the coast's (or the CSV's) J, so a drag J that differs rescales the
+    velocity gains first.  Before cogging: the firmware adds the ff on any
+    trajectory, and the cogging spins stick and slip without it on a geared
+    motor.  Firmware without 0x2381,3 gets the drag alone."""
+    s._preflight()
+    s.need('i_test', 'ld_h', 'lq_h', 'kt_nm_per_a', 'coast', 'no_load')
+    j_was = s.values.get('j_kg_m2') or s.ctx['coast'].get('j_kg_m2')
+    s.stage(commission._stage_drag)
+    s.write('j', 'tc', 'b')
+    v = s.values
+    out = 'J {:.3e} kg.m^2, B {:.2e} N.m.s, Tc {:.2f} mN.m'.format(
+        v['j_kg_m2'], v.get('b_nm_s_per_rad') or 0.0, v['tc_nm'] * 1e3)
+    k = _rescale_for_j(s, j_was, v['j_kg_m2'])
+    if k is not None:
+        out += ', velocity gains x {:.3f}'.format(k)
+    if not firmware.has(s.dev.node, 'friction_ff'):
+        return out + '; no Coulomb ff in this firmware'
+    r = friction.friction_ff(s.dev, v['tc_nm'] * 1e3,
+                             rated_torque_mnm(s.dev.node),
+                             steptest.read_config(s.dev), _top_rpm(s),
+                             log=s.log)
+    s.ctx['friction_ff'] = r
+    if r['capped']:
+        s.rep.check('Coulomb ff', False, 'Tc {:.2f} mNm is past {:g}/1000 of '
+                    'RatedTorque: capped -- check the drag fit'.format(
+                        r['tc_mnm'], friction.FRICTION_FF_MAX_PERMILLE))
+    return out + '; ' + friction.summary_friction_ff(r)
+
+
 def _r_cogging(s):
     """Cogging feed-forward (cogging.calibrate): bins from slow spins
     both ways, the lead scanned from the latency budget (1-2.2x, extended
@@ -917,6 +976,10 @@ STEPS = (
     Step('winding', 'Identify', 'Electrical zero + winding order', _p_winding,
          _r_winding),
     Step('runout', 'Encoder', 'Encoder runout table', _p_runout, _r_runout),
+    # Before cogging: its slow spins carry the ff (on any trajectory) and
+    # stick and slip without it on a geared motor.
+    Step('friction', 'Tune', 'Friction calibration', _p_friction,
+         _r_friction),
     Step('cogging', 'Tune', 'Cogging feed-forward', _p_cogging, _r_cogging),
     Step('save', 'Save', 'Save to NV (Save.App + Save.Mfg)', _p_save, _r_save),
     Step('export', 'Save', 'Export config CSV', _p_export, _r_export),
@@ -937,6 +1000,7 @@ NEEDS = {
     'slope': _CAPTURE + ('isense_slope',),
     'fold': _CAPTURE + ('isense_slope',),
     'runout': _CAPTURE + ('runout',),
+    'friction': _CAPTURE,
     'cogging': _CAPTURE + ('cogging',),
 }
 

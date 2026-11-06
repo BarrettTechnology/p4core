@@ -9,8 +9,9 @@ dict; the GUI draws its plots from that dict.
 """
 
 
+from p4core import cia402
 from p4core.calibrate import test_encoder                        # noqa: F401
-from p4core.cia402 import (CLEAR_FAULT, SHUTDOWN, OP_ENABLED, MODE_IDLE,
+from p4core.cia402 import (MODE_IDLE,
                            MODE_PHASE_VOLTAGE_ANGLE, write_mode)
 
 
@@ -196,9 +197,7 @@ def test_encoder_linearity(node, reporter=None, steps_per_cycle=LIN_STEPS_PER_CY
                           pole_pairs, cts_per_elec, e_zero, e_polarity))
 
         # PHASE_VOLTAGE_ANGLE, ramp to the calibration current at theta_e = 0.
-        node.sdo['ControlWord'].raw = CLEAR_FAULT
-        node.sdo['ControlWord'].raw = SHUTDOWN
-        node.sdo['ControlWord'].raw = OP_ENABLED
+        cia402.enable(node, 'the linearity sweep')
         write_mode(node, MODE_PHASE_VOLTAGE_ANGLE)
         node.sdo['Theta_e'].raw = 0
         reporter.sleep(0.3)
