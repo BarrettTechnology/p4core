@@ -1911,7 +1911,7 @@ class P4Drive:
                    current_a=None, accel_rad_s2=DRAG_ACCEL_RAD_S2,
                    low_rpm=DRAG_LOW_RPM, top_rpm=DRAG_TOP_RPM,
                    step_rpm=DRAG_STEP_RPM, repeats=DRAG_REPEATS,
-                   j_prior_kg_m2=None):
+                   j_prior_kg_m2=None, max_current_a=None):
         """J, B and Coulomb friction with no velocity loop in the way.
 
         The velocity loop's gains are derived from J and B, so a measurement of
@@ -1950,6 +1950,12 @@ class P4Drive:
         *j_prior_kg_m2*, else the drive's stored one, else DRAG_J_PRIOR_KG_M2.
         It only sizes the excitation -- the result does not depend on it --
         and the full-current run uses the J the half-current run found.
+
+        A rotor that pulls out on the way up to the first speed is held back
+        by its breakaway, which a slower ramp does not help: the currents
+        double, up to *max_current_a*, before the acceleration is halved
+        (node 13's BO3518 gearhead needs 0.3-0.6 A of q to break away; 0.49 A
+        on d gives about that at the 60-degree trip).
 
         Returns ``j_kg_m2``, ``b_nm_s_per_rad``, ``a_nm`` (Tc, the mean of the
         two directions), ``zero_error_deg`` and ``skew_us`` (the angle errors
@@ -2006,7 +2012,10 @@ class P4Drive:
         taken = []
         # The low current first: its spring is the weaker, so a pull-out
         # shows there and the halved acceleration serves both runs.
-        for i_hold in (0.5 * i_hi, i_hi):
+        k = 0
+        while k < 2:
+            i_hold = (0.5, 1.0)[k] * i_hi
+            doubled = False
             for attempt in range(DRAG_RETRIES + 1):
                 try:
                     try:
@@ -2021,6 +2030,14 @@ class P4Drive:
                         raise
                     break
                 except _DragPulledOut as exc:
+                    if k == 0 and str(exc).startswith('reaching') and \
+                            max_current_a and 2.0 * i_hi <= max_current_a:
+                        self._log('Drag: pulled out at {:.2f} A ({}): the '
+                                  'breakaway -- doubling the current'.format(
+                                      i_hold, exc))
+                        i_hi *= 2.0
+                        doubled = True
+                        break
                     if attempt == DRAG_RETRIES:
                         raise SysidError(
                             'the rotor pulled out of step at {:.2f} A and '
@@ -2033,6 +2050,9 @@ class P4Drive:
                     # already set below the ceiling.
                     ran = getattr(exc, 'accel_rad_s2', None)
                     accel = 0.5 * (ran if ran else accel)
+            if doubled:
+                continue
+            k += 1
             taken.append((i_hold, windows, info, cruises))
             # Only the next run's sizing needs this J.
             fit = fit_run(i_hold, windows, kt_nm_per_a or kt_size)

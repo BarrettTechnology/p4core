@@ -861,7 +861,7 @@ def _stage_drag(dev, limits, reboot, rep):
             top_drag = max(supply_rpm, 200.0)
         drag = dev.estim_drag(
             kt_nm_per_a=v['kt_nm_per_a'], ld_h=v['ld_h'], lq_h=v['lq_h'],
-            current_a=i_drag,
+            current_a=i_drag, max_current_a=c['i_test'],
             top_rpm=top_drag, low_rpm=min(200.0, 0.2 * top_drag),
             step_rpm=0.8 * top_drag, j_prior_kg_m2=coast['j_kg_m2'])
         rep.raw['drag'] = drag
