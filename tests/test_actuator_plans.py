@@ -74,6 +74,18 @@ class Alone(unittest.TestCase):
         with self.assertRaises(plans.PlanError):
             plans.canonical('velocity_refine')
 
+    def test_ab_names(self):
+        self.assertEqual(plans.canonical('offsets'), 'bias')
+        self.assertEqual(plans.canonical('gainfactor'), 'gain')
+        self.assertEqual(plans.canonical('encoder-offset'), 'winding')
+
+    def test_expand_groups_once_in_run_order(self):
+        self.assertEqual(plans.expand(['ab']), ['bias', 'gain', 'winding'])
+        self.assertEqual(plans.expand(['ezero', 'encoder-offset', 'offsets']),
+                         ['bias', 'winding'])
+        with self.assertRaises(plans.PlanError):
+            plans.expand(['ab', 'nonsense'])
+
     def test_current_firmware_runs_every_step(self):
         self.assertEqual(plans.available_keys(current_node(), plans.ACTUATOR),
                          plans.ACTUATOR)

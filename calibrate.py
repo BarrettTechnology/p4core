@@ -313,16 +313,20 @@ def ramp_to_calibration_current(node, reporter=None, newton=False,
 
 
 def deenergise(node, settle_s=1.0, sleep=time.sleep, clear_fault=False):
-    """Drop ud/uq to zero, go IDLE, and let Motor/id follow it down.
+    """Drop ud/uq to zero, go IDLE, shut down (controlword 0x06), and let
+    Motor/id follow it down.
 
     The exported current is low-passed at a cutoff from rt/lt; a second
     covers every puck.  Never raises: it is what runs on the way out.
-    *clear_fault* also writes CLEAR_FAULT, ready for the next step.
+    *clear_fault* also writes CLEAR_FAULT, ready for the next step.  The
+    shutdown matters on 4.3.x, which stays Operation Enabled in IDLE
+    (statusword 0x37) after a calibration otherwise; each step enables again.
     """
     writes = [lambda: setattr(node.sdo['Motor']['ud'], 'raw', 0),
               lambda: setattr(node.sdo['Motor']['uq'], 'raw', 0),
               lambda: setattr(node.sdo['SetModeOfOperation'], 'raw',
-                              MODE_IDLE)]
+                              MODE_IDLE),
+              lambda: setattr(node.sdo['ControlWord'], 'raw', 0x06)]
     if clear_fault:
         writes.append(lambda: setattr(node.sdo['ControlWord'], 'raw', 0x80))
     for write in writes:

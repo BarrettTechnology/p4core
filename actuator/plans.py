@@ -44,11 +44,19 @@ PLANS = {
     'actuator': ('Actuator Calibration', ACTUATOR),
 }
 
-#: Other names the apps' command lines take for a step.
+#: Other names the apps' command lines take for a step.  offsets,
+#: gainfactor and encoder-offset are the names a firmware A/B gives its four
+#: calibration steps (current offsets, gainfactor, encoder offset, electrical
+#: zero + winding order): the last two are the one winding sweep.
 ALIASES = {'enczero': 'winding', 'ezero': 'winding', 'encoder-test': 'encoder',
            'encdir': 'winding', 'runout-table': 'runout',
            'drag': 'friction', 'friction-ff': 'friction',
-           'friction_ff': 'friction'}
+           'friction_ff': 'friction',
+           'offsets': 'bias', 'gainfactor': 'gain', 'encoder-offset': 'winding'}
+
+#: Names that stand for several steps.  ab: the four steps of the 4.3.5 /
+#: 5.0 A/B, which 4.3.x runs as well.
+GROUPS = {'ab': ('bias', 'gain', 'winding')}
 
 
 class PlanError(ValueError):
@@ -76,6 +84,18 @@ def canonical(name, allowed=None):
         raise PlanError('unknown step {!r}; choose from {}'.format(
             name, ', '.join(allowed)))
     return key
+
+
+def expand(names, allowed=None):
+    """Step keys for *names* (keys, ALIASES or GROUPS names), each once, in
+    run order."""
+    keys = set()
+    for name in names:
+        if name in GROUPS:
+            keys.update(canonical(k, allowed) for k in GROUPS[name])
+        else:
+            keys.add(canonical(name, allowed))
+    return run_order(keys)
 
 
 def stage_of(key):
