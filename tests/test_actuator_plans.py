@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, ROOT)
@@ -103,6 +104,37 @@ class TestRegister(unittest.TestCase):
                            lambda s: 'ok')
         with self.assertRaises(ValueError):
             steps.register([extra], steps.STEP_KEYS)
+
+
+class TestSummaryText(unittest.TestCase):
+    """The summary reads in a dialog's proportional font: no column
+    alignment, one duration format."""
+
+    def session(self):
+        s = mock.Mock()
+        s.results = {
+            'encoder': {'status': 'pass', 'detail': 'filter 0x90',
+                        'seconds': 41.2},
+            'friction': {'status': 'warn', 'detail': 'J 1e-6', 'seconds': 125},
+            'cogging': {'status': 'fail', 'detail': 'boom', 'seconds': 700},
+        }
+        return s
+
+    def test_format(self):
+        text = plans.summary_text(self.session(),
+                                  ('encoder', 'friction', 'cogging'))
+        lines = text.splitlines()
+        self.assertTrue(lines[0].endswith('PASS (41 s)'))
+        self.assertEqual(lines[1], '      filter 0x90')
+        self.assertIn('WARN (2 min 05 s)', text)
+        self.assertIn('FAIL (11 min 40 s)', text)
+        self.assertEqual(lines[-1], 'Total: 14 min 26 s')
+        self.assertNotIn('  PASS', text)      # no padding columns
+
+    def test_duration(self):
+        self.assertEqual(plans.duration(0.4), '0 s')
+        self.assertEqual(plans.duration(59.6), '1 min 00 s')
+        self.assertEqual(plans.duration(3600), '60 min 00 s')
 
 
 if __name__ == '__main__':

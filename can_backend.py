@@ -163,6 +163,151 @@ def bring_iface_up(can_device, bitrate=1_000_000, data_bitrate=5_000_000):
         return False
 
 
+#: The CAN bring-up files puck-can-common/-peak/-canable install under /usr/lib,
+#: and the /etc paths that shadow them (an /etc file of the same name wins
+#: in udev and systemd).  P4-Checkout and Puck Fader debs, and the old
+#: setup-socketcan.sh, put their own copies in /etc.
+CAN_UP_FILES = (
+    ('/usr/lib/systemd/system/can-up@.service', '/etc/systemd/system/can-up@.service'),
+    ('/usr/lib/udev/rules.d/61-can-up.rules', '/etc/udev/rules.d/61-can-up.rules'),
+    ('/usr/lib/udev/rules.d/60-can.rules', '/etc/udev/rules.d/60-can.rules'),
+    ('/usr/lib/udev/rules.d/90-canable.rules', '/etc/udev/rules.d/90-canable.rules'),
+)
+
+
+def shadowed_can_files():
+    """The /etc files that override the installed CAN bring-up (an /etc
+    copy beside our /usr/lib one, with different contents): [(etc, usr)].
+    On such a machine can0 comes up with another app's timing (the kernel's
+    75 % sample point, SJW 20, not the bench's 68.7 %, 50/10), and the
+    adapter's error counters climb under load -- a puck went bus-off in a
+    cogging capture.  Linux only; [] elsewhere."""
+    if platform.system() != 'Linux':
+        return []
+    out = []
+    for usr, etc in CAN_UP_FILES:
+        try:
+            if not (os.path.exists(usr) and os.path.exists(etc)):
+                continue
+            with open(usr, 'rb') as a, open(etc, 'rb') as b:
+                if a.read() != b.read():
+                    out.append((etc, usr))
+        except OSError:
+            continue
+    return out
+
+
+def shadowed_can_files_message(files=None):
+    """A user message for shadowed_can_files(), or '' when there are none."""
+    files = shadowed_can_files() if files is None else files
+    if not files:
+        return ''
+    return ('Another program\'s CAN set-up overrides this one:\n\n{}\n\n'
+            'CAN interfaces come up with that file\'s timing, not the puck '
+            'timing, and the bus can fail under load (adapter error '
+            'warnings, CAN bus-off).  Re-run this app\'s installer, which '
+            'moves these files aside, or remove them (sudo rm) and replug '
+            'the CAN adapter.'.format(
+                '\n'.join('  {}  (overrides {})'.format(e, u)
+                          for e, u in files)))
+
+
+def iface_details(can_device):
+    """What the kernel says about SocketCAN *can_device*: dict(state,
+    bitrate, sample_point, sjw, dbitrate, dsample_point, dsjw, bus_off,
+    error_passive, error_warning, restarts, berr_tx, berr_rx), any of them
+    None when not reported; None when it cannot be read (not Linux, no
+    `ip`, no such interface, not a CAN link).  `ip -details -statistics
+    -json` (iproute2 5.5, Ubuntu 20.04, and later)."""
+    if platform.system() != 'Linux' or not can_device:
+        return None
+    import json
+    try:
+        out = subprocess.run(['ip', '-details', '-statistics', '-json', 'link',
+                              'show', 'dev', str(can_device)],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            return None
+        info = json.loads(out.stdout)[0].get('linkinfo') or {}
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return None
+    if info.get('info_kind') != 'can':
+        return None
+    data = info.get('info_data') or {}
+    xs = info.get('info_xstats') or {}
+    bt = data.get('bittiming') or {}
+    dbt = data.get('data_bittiming') or {}
+    berr = data.get('berr_counter') or {}
+
+    def num(v, kind=float):
+        try:
+            return kind(v)
+        except (TypeError, ValueError):
+            return None
+    return dict(
+        state=data.get('state'),
+        bitrate=num(bt.get('bitrate'), int),
+        sample_point=num(bt.get('sample_point')),
+        sjw=num(bt.get('sjw'), int),
+        dbitrate=num(dbt.get('bitrate'), int),
+        dsample_point=num(dbt.get('sample_point')),
+        dsjw=num(dbt.get('sjw'), int),
+        bus_off=num(xs.get('bus_off'), int),
+        error_passive=num(xs.get('error_passive'), int),
+        error_warning=num(xs.get('error_warning'), int),
+        restarts=num(xs.get('restarts'), int),
+        berr_tx=num(berr.get('tx'), int),
+        berr_rx=num(berr.get('rx'), int))
+
+
+def iface_timing_text(can_device):
+    """'can0: 1000000 bit/s, sample point 0.687, SJW 50; data 5000000 bit/s,
+    sample point 0.687, SJW 10' for the log, or '' when it cannot be read."""
+    d = iface_details(can_device)
+    if not d or not d['bitrate']:
+        return ''
+
+    def part(rate, sp, sjw):
+        return '{} bit/s, sample point {}, SJW {}'.format(
+            rate, '?' if sp is None else '{:.3f}'.format(sp),
+            '?' if sjw is None else sjw)
+    txt = '{}: {}'.format(can_device, part(d['bitrate'], d['sample_point'],
+                                           d['sjw']))
+    if d['dbitrate']:
+        txt += '; data ' + part(d['dbitrate'], d['dsample_point'], d['dsjw'])
+    return txt
+
+
+def network_channel(network):
+    """The SocketCAN interface name a canopen Network is on, or None."""
+    bus = getattr(network, 'bus', None)
+    ch = getattr(bus, 'channel', None) or getattr(bus, 'channel_info', None)
+    if isinstance(ch, str) and ch.startswith(('can', 'vcan', 'slcan')):
+        return ch.split()[0]
+    return None
+
+
+def bus_trouble(network, before=None):
+    """The host adapter's view of a CAN fault on *network*'s interface: a
+    text such as 'can0 is BUS-OFF' or 'can0 went bus-off 1 time(s), error
+    passive 3 time(s)' (counted since *before*, an earlier iface_details()),
+    or '' when it saw none or cannot tell."""
+    ch = network_channel(network)
+    d = iface_details(ch) if ch else None
+    if not d:
+        return ''
+    parts = []
+    if d['state'] and d['state'] not in ('ERROR-ACTIVE', 'STOPPED'):
+        parts.append('is {}'.format(d['state']))
+    b = before or {}
+    for key, label in (('bus_off', 'went bus-off'),
+                       ('error_passive', 'went error-passive')):
+        n = (d[key] or 0) - (b.get(key) or 0)
+        if n > 0:
+            parts.append('{} {} time(s)'.format(label, n))
+    return '{} {}'.format(ch, ', '.join(parts)) if parts else ''
+
+
 class CanBusUnavailable(RuntimeError):
     """The CAN interface can't be brought up cleanly. `state` is one of:
       'missing' -- interface not present (adapter unplugged / driver not loaded)

@@ -168,6 +168,7 @@ def make_session(node, reporter, sync=None, reboot=None, limits=None,
                                     should_abort=reporter.should_abort,
                                     sync=sync,
                                     detail=getattr(reporter, 'detail', None))
+    session_kw.setdefault('confirm', getattr(reporter, 'confirm', None))
     return steps.Session(dev, limits or Limits(), reboot=reboot,
                          export_path=export_path, **session_kw)
 
@@ -186,12 +187,16 @@ def run(session, keys, reporter=None, on_update=None):
             done.add(key)
             reporter.progress(100 * len(done) // max(len(todo), 1))
             sec = res.get('seconds')
-            line = '{}: {} {}{}'.format(
-                title(key), res.get('status', '?').upper(),
-                res.get('detail', ''),
-                '  ({:.1f} s)'.format(sec) if sec is not None else '')
-            (reporter.warn if res.get('status') in ('fail', 'warn')
-             else reporter.note)(line.rstrip())
+            status = res.get('status', '?')
+            # A failure's reason is already in the log (the session's
+            # "FAILED:" line) and is in the summary: the verdict only.
+            line = '{}: {}{}{}'.format(
+                title(key), status.upper(),
+                '' if status == 'fail' or not res.get('detail') else
+                ' -- ' + res['detail'],
+                ' ({})'.format(duration(sec)) if sec is not None else '')
+            (reporter.warn if status in ('fail', 'warn') else
+             reporter.note)(line)
         if on_update is not None:
             on_update(key)
 
@@ -214,25 +219,34 @@ def summary(session, keys):
     return out
 
 
+def duration(sec):
+    """One format for every duration: '41 s', '2 min 05 s'."""
+    sec = int(round(sec))
+    if sec < 60:
+        return '{} s'.format(sec)
+    return '{} min {:02d} s'.format(sec // 60, sec % 60)
+
+
 def _seconds(session, key):
-    """'41 s' / '6.2 min' for a step that ran, '' otherwise."""
+    """duration() for a step that ran, '' otherwise."""
     sec = session.results.get(key, {}).get('seconds')
-    if sec is None:
-        return ''
-    return '{:.0f} s'.format(sec) if sec < 600 else '{:.1f} min'.format(
-        sec / 60.0)
+    return '' if sec is None else duration(sec)
 
 
 def summary_text(session, keys):
-    """The verdict table, with each step's wall-clock time (cool-down
-    wait included) and the total."""
+    """The verdict per step, for a dialog in a proportional font as well as
+    the log: no column alignment, the detail on its own indented line, one
+    duration format, and the total."""
     order = run_order(keys)
-    lines = ['{:2d}. {:<34} {:<7} {:>8}  {}'.format(
-        n, t, s.upper(), _seconds(session, k), d).rstrip()
-        for k, (n, t, s, d) in zip(order, summary(session, keys))]
+    lines = []
+    for k, (n, t, s, d) in zip(order, summary(session, keys)):
+        sec = _seconds(session, k)
+        lines.append('{}. {}: {}{}'.format(
+            n, t, s.upper(), ' ({})'.format(sec) if sec else ''))
+        if d:
+            lines.append('      ' + d)
     total = sum(session.results.get(k, {}).get('seconds') or 0.0
                 for k in order)
     if total:
-        lines.append('    {:<34} {:<7} {:>8}'.format(
-            'Total', '', '{:.1f} min'.format(total / 60.0)))
+        lines.append('Total: {}'.format(duration(total)))
     return '\n'.join(lines)

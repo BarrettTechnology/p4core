@@ -34,6 +34,7 @@ tui.py is the screen for this; the steps themselves need no terminal.
 """
 
 import copy
+import logging
 import math
 import time
 import traceback
@@ -43,6 +44,9 @@ from .commission import Limits, SysidError, drive_units, write_od
 from .drivecal import CalError
 from p4core import firmware
 from p4core.calibrate import rated_torque_mnm, read_friction, read_kt
+
+
+_logger = logging.getLogger(__name__)
 
 
 class StepFailed(SysidError):
@@ -208,12 +212,16 @@ class Session:
     are the runout and velocity options from commission_motor.  *export_path* is
     where Export CSV writes (default: <model>-node<N>-<date>.csv here).
     *autosave* False leaves each step's results in RAM for the Save step.
+    *confirm(question, default)* asks the user a yes/no a step cannot
+    decide alone (a p4core Reporter's confirm); without it every question
+    takes its default.
     """
 
     def __init__(self, dev, limits=None, reboot=None, skip_k=(), geared=False,
                  max_vel_hz=None, delta=None, log=None, export_path=None,
-                 autosave=True):
+                 autosave=True, confirm=None):
         self.dev = dev
+        self.confirm = confirm or (lambda question, default=False: default)
         self.autosave = autosave
         self.export_path = export_path
         self.limits = limits or Limits()
@@ -505,7 +513,10 @@ class Session:
                     self.log('{}: FAILED: {}'.format(st.title, exc))
                     # Where it failed: a bus error's message alone (an SDO
                     # abort, "Unexpected response") does not say which call.
-                    self.log(traceback.format_exc().rstrip())
+                    # For a developer (Python logging, DEBUG), not the
+                    # user's log window.
+                    _logger.debug('%s failed:\n%s', st.title,
+                                  traceback.format_exc().rstrip())
                     try:
                         self.dev.safe_stop()
                     except Exception:
@@ -695,6 +706,14 @@ def _r_slope(s):
         return ('kA {:+.4f}, kB {:+.4f} (saved): fit too noisy to trust '
                 '(R^2 alpha {:.2f} beta {:.2f}) -- stored as 0, correction '
                 'left off'.format(r['kA'], r['kB'], r['r2A'], r['r2B']))
+    if not r['stored'] and r.get('gain_ok', True) and r.get('slope_ok', True) \
+            and not r.get('effect_ok', True):
+        # The same outcome as a fit too noisy to trust: no slope that tracks
+        # the load, the correction left off.  Graded the same: a pass with a
+        # note (it was WARN here and PASS there, run to run on one board).
+        return ('no slope that tracks the load (|I| spread {:.0f} mA, '
+                'direction spread {:.0f} deg) -- correction left off'.format(
+                    r.get('i_spread', 0.0), r.get('angle_spread_deg', 0.0)))
     if not r['stored']:
         s.rep.check('Slope', False, 'fit not stored, slope left off: '
                     + '; '.join(r.get('rejected') or ()))
@@ -824,23 +843,54 @@ def _top_rpm(s):
 #: The drag's J against the one the velocity loop was designed on: a
 #: change past this rescales its Kp/Ki (_rescale_for_j).
 J_RESCALE_MIN = 1e-3
+#: A rescale outside these factors is worth a second look: a config J far
+#: from the measured one, or a drag fit that went wrong.  The question says so.
+J_RESCALE_WARN = (0.5, 2.0)
 
 
 def _rescale_for_j(s, j_was, j):
     """The velocity PI's torque per rad/s of error was designed for *j_was*
     (the coast's, or the CSV's): the same crossover on the drag's *j* takes
     Kp and Ki x j / j_was.  The position loop commands velocity and does not
-    care."""
+    care.  The user is asked first, with the old and new gains: the loop may
+    be hand-tuned on a load the drag does not see (a gearhead's).  Without
+    anyone to ask (a script) the rescale is applied, as before.  Returns
+    (factor, applied, text) or None when J did not change."""
     if not j_was or not j or abs(j / j_was - 1) < J_RESCALE_MIN:
         return None
     k = j / j_was
-    for key in ('vel_kp', 'vel_ki'):
-        g = steptest.read(s.dev, key)
-        if g:
-            steptest.write(s.dev, key, g * k)
-    s.log('friction: velocity Kp/Ki x {:.4f}: J {:.4g} -> {:.4g} '
-          'g.cm^2'.format(k, j_was * 1e7, j * 1e7))
-    return k
+    old = {key: steptest.read(s.dev, key) for key in ('vel_kp', 'vel_ki')}
+    new = {key: g * k for key, g in old.items() if g}
+    if not new:
+        return None
+    gains = ', '.join('{} {:.4g} -> {:.4g}'.format(
+        'Kp' if key == 'vel_kp' else 'Ki', old[key], new[key])
+        for key in ('vel_kp', 'vel_ki') if key in new)
+    unusual = not J_RESCALE_WARN[0] <= k <= J_RESCALE_WARN[1]
+    question = (
+        'Rescale velocity gains?\n'
+        'Friction calibration measured the rotor inertia J = {:.4g} g.cm^2; '
+        'the velocity loop (0x2381,1-2) was tuned for J = {:.4g} g.cm^2.\n\n'
+        'Keeping its bandwidth on the measured J scales the gains x {:.3f}:\n'
+        '    {}\n\n{}'
+        'Yes: rescale them (saved with this step).\n'
+        'No: keep the gains as they are (choose No for a hand-tuned loop).'
+        .format(j * 1e7, j_was * 1e7, k, gains,
+                'This is a large change: check the configuration\'s J and '
+                'the drag fit.\n\n' if unusual else ''))
+    if not s.confirm(question, default=True):
+        s.log('friction: velocity gains kept ({}; J {:.4g} -> {:.4g} '
+              'g.cm^2 not applied, by request)'.format(
+                  gains.replace('->', 'would be'), j_was * 1e7, j * 1e7))
+        return k, False, 'velocity gains kept (J x {:.3f} not applied)'.format(k)
+    for key, g in new.items():
+        steptest.write(s.dev, key, g)
+    s.log('friction: velocity gains x {:.4f}: {} (J {:.4g} -> {:.4g} '
+          'g.cm^2)'.format(k, gains, j_was * 1e7, j * 1e7))
+    if unusual:
+        s.rep.check('velocity gains', False, 'rescaled x {:.3f} for the '
+                    'measured J: check the configuration\'s J'.format(k))
+    return k, True, 'velocity gains x {:.3f} ({})'.format(k, gains)
 
 
 def _r_friction(s):
@@ -859,9 +909,9 @@ def _r_friction(s):
     v = s.values
     out = 'J {:.3e} kg.m^2, B {:.2e} N.m.s, Tc {:.2f} mN.m'.format(
         v['j_kg_m2'], v.get('b_nm_s_per_rad') or 0.0, v['tc_nm'] * 1e3)
-    k = _rescale_for_j(s, j_was, v['j_kg_m2'])
-    if k is not None:
-        out += ', velocity gains x {:.3f}'.format(k)
+    rescaled = _rescale_for_j(s, j_was, v['j_kg_m2'])
+    if rescaled is not None:
+        out += '; ' + rescaled[2]
     if not firmware.has(s.dev.node, 'friction_ff'):
         return out + '; no Coulomb ff in this firmware'
     r = friction.friction_ff(s.dev, v['tc_nm'] * 1e3,
@@ -885,7 +935,18 @@ def _r_cogging(s):
     if not cogging.layout(s.dev)[0]:
         return 'not in this firmware: skipped'
     s.need('pole_pairs')
-    r = cogging.calibrate(s.dev, int(s.values['pole_pairs']), log=s.log)
+    try:
+        r = cogging.calibrate(s.dev, int(s.values['pole_pairs']), log=s.log)
+    except cogging.CaptureLost:
+        raise                    # a CAN fault: the drive is not fit to go on
+    except SysidError as exc:
+        # The cogging ff is a refinement: the actuator works without it.  A
+        # loop too soft to hold the slow spins (stick-slip), or a ripple the
+        # table did not lower, leaves the table the drive had (calibrate
+        # restores it) and the calibration goes on -- a warning, not a
+        # failure that would fail the whole run.
+        s.rep.check('cogging', False, 'not applied: {}'.format(exc))
+        return 'not applied, the table is as it was: {}'.format(exc)
     s.unsaved = True
     s.ctx['cogging'] = r
     if not r.get('passed'):

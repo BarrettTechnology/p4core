@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, '..', '..')))
@@ -125,6 +126,43 @@ class FitTests(unittest.TestCase):
         self.assertEqual(fit['kA'], 0.0)
         self.assertEqual(fit['kB'], 0.0)
         self.assertNotEqual(fit['kA_fit'], 0.0)  # the raw fit kept for the log
+
+
+class SlopeStepGradeTests(unittest.TestCase):
+    """steps._r_slope grades "no slope that tracks the load" as it grades
+    "too noisy to trust": both leave the correction off and pass.  It was
+    WARN in one run and PASS in the next on one board (node 15)."""
+
+    def grade(self, r):
+        from p4core.actuator import steps
+        s = mock.Mock(ctx={})
+        checks = []
+        s.rep.check = lambda *a, **k: checks.append(a)
+        with mock.patch.object(steps, '_clear_board_corrections'), \
+                mock.patch('p4core.actuator.slope.calibrate_current_slope',
+                           return_value=r):
+            return steps._r_slope(s), checks
+
+    def base(self, **kw):
+        r = dict(stored=False, zeroed=False, gain_ok=True, slope_ok=True,
+                 effect_ok=True, rejected=['x'], kA=0.0, kB=0.0, r2A=0.1,
+                 r2B=0.2, i_spread=12.0, angle_spread_deg=101.0)
+        r.update(kw)
+        return r
+
+    def test_no_effect_passes_with_a_note(self):
+        out, checks = self.grade(self.base(effect_ok=False))
+        self.assertEqual(checks, [])
+        self.assertIn('correction left off', out)
+
+    def test_too_noisy_passes_with_a_note(self):
+        out, checks = self.grade(self.base(zeroed=True, stored=True))
+        self.assertEqual(checks, [])
+        self.assertIn('correction left off', out)
+
+    def test_a_bad_gain_still_warns(self):
+        _, checks = self.grade(self.base(gain_ok=False, effect_ok=False))
+        self.assertEqual(checks[0][:2], ('Slope', False))
 
 
 class SlopeCalTests(unittest.TestCase):

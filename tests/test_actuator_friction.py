@@ -90,10 +90,13 @@ class TestFrictionStep(unittest.TestCase):
     """steps._r_friction: the drag, the velocity gains rescaled to its J,
     then the ff on its Tc.  The drag's physics is p4sysid's test_device."""
 
-    def _run(self, j_was, j_drag, has_ff=True):
+    def _run(self, j_was, j_drag, has_ff=True, answer=True):
         regs = {'vel_kp': 0.004, 'vel_ki': 0.2}
         s = mock.Mock(values={}, ctx={'coast': {'j_kg_m2': j_was}},
                       limits=commission.Limits(), log=lambda *_: None)
+        self.asked = []
+        s.confirm = lambda q, default=False: self.asked.append(
+            (q, default)) or answer
         s.dev.node = object()
         writes = []
         s.write = lambda *keys: writes.append(keys)
@@ -129,10 +132,30 @@ class TestFrictionStep(unittest.TestCase):
         self.assertIn('x 1.200', out)
         self.assertIn('ff kept', out)
 
+    def test_asks_first_with_the_old_and_new_gains(self):
+        self._run(5e-6, 6e-6)
+        (q, default), = self.asked
+        self.assertTrue(q.startswith('Rescale velocity gains?\n'))
+        self.assertIn('Kp 0.004 -> 0.0048', q)
+        self.assertIn('Ki 0.2 -> 0.24', q)
+        self.assertTrue(default)        # a script keeps the old behaviour
+
+    def test_no_keeps_the_gains(self):
+        out, regs, _, ff = self._run(5e-6, 6e-6, answer=False)
+        self.assertEqual(regs, {'vel_kp': 0.004, 'vel_ki': 0.2})
+        self.assertIn('velocity gains kept', out)
+        self.assertEqual(ff, [2.0])     # the ff still runs
+
+    def test_a_large_change_is_flagged(self):
+        self._run(21e-6, 6e-6)          # x 0.285, node 15's
+        q = self.asked[0][0]
+        self.assertIn('large change', q)
+
     def test_same_j_leaves_the_gains(self):
         out, regs, _, _ = self._run(6e-6, 6e-6)
         self.assertEqual(regs, {'vel_kp': 0.004, 'vel_ki': 0.2})
         self.assertNotIn('velocity gains', out)
+        self.assertEqual(self.asked, [])
 
     def test_no_prior_j_leaves_the_gains(self):
         _, regs, _, _ = self._run(None, 6e-6)

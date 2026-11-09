@@ -1513,8 +1513,30 @@ class P4Drive:
         except Exception:
             code = 0
         if not code:
+            # The drive's history (0x1003) may hold what LastError lost.
+            try:
+                code = int.from_bytes(bytes(self.node.sdo.upload(0x1003, 1))[:2],
+                                      'little')
+            except Exception:
+                code = 0
+        # A CAN fault the host adapter saw is not the supply: node 15
+        # (P4-32, 2026-11-09) went bus-off on a mistimed bus, and "the
+        # supply browning out" sent the search the wrong way.
+        trouble = ''
+        try:
+            from p4core import can_backend
+            trouble = can_backend.bus_trouble(self.node.network)
+        except Exception:
+            pass
+        if not code:
+            if trouble:
+                return ('no error code from the drive; the CAN adapter reports '
+                        'a bus fault ({}): check the CAN timing, cabling and '
+                        'termination'.format(trouble))
             return 'no error code; most likely the supply browning out ' + where
         text = cia402.describe_error(code)
+        if trouble:
+            text += '; the CAN adapter reports {}'.format(trouble)
         if code in cia402.SUPPLY_ERROR_CODES:
             return 'error {}: the supply, {}'.format(text, where)
         return 'error {}'.format(text)
@@ -2042,8 +2064,14 @@ class P4Drive:
                         raise SysidError(
                             'the rotor pulled out of step at {:.2f} A and '
                             '{:.0f} rad/s^2 even after {} halvings ({}).  '
-                            'Raise the drag current or check for a binding '
-                            'load.'.format(i_hold, accel, attempt, exc))
+                            'The drag current is the session\'s test current'
+                            '{}, which the calibration current '
+                            'Calibration.i_cal (0x3011,11, now {:.0f} mA) and '
+                            'the winding\'s heat budget cap: raise i_cal, or '
+                            'check for a binding load.'.format(
+                                i_hold, accel, attempt, exc,
+                                ' ({:.2f} A)'.format(max_current_a)
+                                if max_current_a else '', s['i_cal_ma']))
                     self._log('Drag: pulled out at {:.2f} A, {:.0f} rad/s^2 '
                               '({}); halving'.format(i_hold, accel, exc))
                     # Halve what the steps ran at, which the spring may have

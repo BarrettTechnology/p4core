@@ -36,6 +36,7 @@ locked ripple at 30 rpm 28 -> 4.3 rpm.
 
 import math
 import struct
+import time
 
 import numpy as np
 
@@ -214,6 +215,7 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
     out = dict(cfg=cfg, frame=_frame(dev), runs=[])
     for rpm in rpms:
         for sgn in (1, -1):
+            can_before = _can_counters(dev)
             with _Stream(dev, LOG_SRC_IQ_POS) as s:
                 try:
                     steptest._enable(dev, steptest.MODE_CSV)
@@ -221,11 +223,24 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
                                    int(round(sgn * rpm * res / 60.0)))
                     steptest._sleep(dev, min(1.5, 0.3 + 6.0 / rpm))
                     m0 = s.mark()
+                    t0 = time.monotonic()
                     steptest._sleep(dev, revs * 60.0 / rpm + 0.2)
                     m1 = s.mark()
+                    span = time.monotonic() - t0
                 finally:
-                    steptest._stop(dev)
+                    try:
+                        steptest._stop(dev)
+                    except Exception as exc:
+                        # A drive that stopped answering: say if the bus went.
+                        lost = _can_lost(dev, can_before)
+                        if lost:
+                            raise CaptureLost('{:+.0f} rpm: {}'.format(
+                                sgn * rpm, lost)) from exc
+                        raise
                 fr = np.array(s.frames[m0:m1], float)
+            lost = _stream_lost(dev, fr, span, can_before)
+            if lost:
+                raise CaptureLost('{:+.0f} rpm: {}'.format(sgn * rpm, lost))
             if len(fr) < 10:
                 raise SysidError('the stream sent {} frames at {:+.0f} rpm'
                                  .format(len(fr), sgn * rpm))
@@ -233,10 +248,10 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
             if spread and spread[1] > STICK_SLIP_X * abs(spread[0]):
                 k = 60.0 * cfg.get('control_hz', 0) / res \
                     if cfg.get('control_hz') else None
-                raise SysidError(
+                raise StickSlip(
                     'the speed at {:+.0f} rpm is not steady (10 ms means '
                     '{}): stick-slip, the velocity loop cannot hold it -- '
-                    '{}, or leave cogging out on a slotless motor'.format(
+                    '{}'.format(
                         sgn * rpm, '{:.0f} +- {:.0f} rpm'.format(
                             spread[0] * k, spread[1] * k) if k else
                         '{:.3f} +- {:.3f} counts/cycle'.format(*spread),
@@ -253,9 +268,11 @@ def capture(dev, rpms, revs=REVS, cfg=None, log=None):
             pos = np.unwrap(fr[:, 2] * (2 * np.pi / 65536)) * 65536 / (2 * np.pi)
             moved = abs(pos[-1] - pos[0]) / res
             if moved < 0.8 * revs:
-                raise SysidError('{:+.0f} rpm moved {:.2f} of {} revolutions: '
-                                 'is the rotor free and the velocity loop '
-                                 'tuned?'.format(sgn * rpm, moved, revs))
+                raise StickSlip('{:+.0f} rpm moved {:.2f} of {} revolutions '
+                                '(the stream kept up, so not the bus): the '
+                                'rotor is held back -- a binding load, or a '
+                                'velocity loop too soft to turn it ({})'.format(
+                                    sgn * rpm, moved, revs, _loop_text(dev)))
             out['runs'].append(dict(rpm=rpm, sgn=sgn, cycles=c, iq=iq, pos=pos,
                                     bad_frames=bad))
             if log:
@@ -312,18 +329,100 @@ def clean_frames(fr, res):
     return fr[keep], len(fr) - len(keep)
 
 
+class CaptureLost(SysidError):
+    """The capture's stream stopped, or the drive stopped answering: a CAN
+    fault (bus-off, a dropped adapter), not the rotor."""
+
+
+class StickSlip(SysidError):
+    """The rotor did not turn steadily at the capture speed: the velocity
+    loop cannot hold it against the load.  The cogging table is left as it
+    was; the calibration goes on without it (steps._r_cogging)."""
+
+
+def _can_counters(dev):
+    try:
+        from p4core import can_backend
+        ch = can_backend.network_channel(dev.node.network)
+        return (can_backend.iface_details(ch) if ch else None) or {}
+    except Exception:          # noqa: BLE001 -- a diagnosis, never a failure
+        return {}
+
+
+def _can_lost(dev, before):
+    """'the CAN adapter reports can0 went bus-off 1 time(s)' when the host
+    saw a bus fault since *before* (_can_counters), else ''."""
+    try:
+        from p4core import can_backend
+        trouble = can_backend.bus_trouble(dev.node.network, before)
+    except Exception:          # noqa: BLE001
+        trouble = ''
+    if trouble:
+        return ('the CAN adapter reports {}: a bus fault, not the rotor -- '
+                'check the CAN timing (sample point, SJW), cabling and '
+                'termination'.format(trouble))
+    return ''
+
+
+#: The stream's frames over the capture against its SYNC rate: below this
+#: fraction, or a gap longer than STREAM_GAP_S, the stream stopped.
+STREAM_MIN_FRACTION = 0.5
+STREAM_GAP_S = 0.25
+
+
+def _stream_lost(dev, fr, span_s, before):
+    """Why the capture's stream is not a measurement (it stopped: frames
+    missing, a long gap, a bus fault on the host), or ''."""
+    lost = _can_lost(dev, before)
+    if lost:
+        return lost
+    from .device import STREAM_SYNC_HZ
+    expected = span_s * STREAM_SYNC_HZ
+    gap = 0.0
+    if len(fr) > 1 and fr.shape[1] > 3:
+        gap = float(np.max(np.diff(fr[:, -1])))
+    if len(fr) < STREAM_MIN_FRACTION * expected or gap > STREAM_GAP_S:
+        try:
+            from p4core import cia402
+            drive = cia402.diagnose(dev.node)
+        except Exception:      # noqa: BLE001
+            drive = 'the drive did not answer'
+        return ('the measurement stream stopped ({} of ~{:.0f} frames, '
+                'longest gap {:.2f} s; drive: {}): a CAN fault, not the '
+                'rotor -- check the CAN timing, cabling and termination'
+                .format(len(fr), expected, gap, drive))
+    return ''
+
+
+def _loop_text(dev):
+    try:
+        return 'velocity Kp {:.4g}, Ki {:.4g} (0x2381,1-2)'.format(
+            steptest.read(dev, 'vel_kp'), steptest.read(dev, 'vel_ki'))
+    except Exception:          # noqa: BLE001
+        return 'velocity gains 0x2381,1-2'
+
+
 def _stick_slip_hint(dev):
-    """What to do about stick-slip, by the Coulomb ff (0x2381,3) the
-    friction step, just before, left."""
+    """What to do about stick-slip.  Not "run Friction calibration": in a
+    full calibration it has just run, and its Coulomb ff (0x2381,3) covers
+    the average moving friction only, not a gearhead's load at low speed
+    (node 15, P4-32 BO3518: ~230 mA to turn at 30 rpm, ff on, loop nearly
+    P-only)."""
     try:
         ff = float(steptest.read(dev, 'vel_tc_ff'))
     except Exception:       # noqa: BLE001 -- firmware without the ff
-        return 'this firmware has no friction feed-forward (0x2381,3)'
-    if ff > 0:
-        return ('even with the Coulomb ff at {:.3g}/1000: check the drag\'s '
-                'Tc (0x3011,17)'.format(ff))
-    return ('the Coulomb ff (0x2381,3) is off: run Friction calibration '
-            'first (the drag, then the ff on its Tc)')
+        ff = None
+    loop = _loop_text(dev)
+    if ff is None:
+        ffs = 'this firmware has no friction feed-forward'
+    elif ff > 0:
+        ffs = 'the Coulomb ff (0x2381,3) is on at {:.3g}/1000'.format(ff)
+    else:
+        ffs = ('the Coulomb ff (0x2381,3) is off (Friction calibration '
+               'leaves it off when it does not help)')
+    return ('the velocity loop ({}) is too soft for this load at low speed '
+            '({}); raise its Ki, or leave cogging out -- the actuator works '
+            'without it'.format(loop, ffs))
 
 
 def speed_spread(fr, n=STICK_SLIP_BIN):

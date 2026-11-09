@@ -492,10 +492,15 @@ def calibrate_current_slope(node, reporter=None, force_sdo=False, quick=False,
                     fit['kB_fit'], fit['seB']))
 
         if not fit['store']:
-            reporter.warn('NOT STORING (slope left OFF — it was cleared at '
-                          'the start of this cal):')
+            # No slope that tracks the load is an outcome, like a fit too
+            # noisy to trust (both leave the correction off); a bad gain
+            # factor or an absurd slope is a warning.
+            say = reporter.warn if not (fit['gain_ok'] and fit['slope_ok']) \
+                else reporter.note
+            say('NOT STORING (slope left OFF — it was cleared at the start of '
+                'this cal):')
             for why in fit['rejected']:
-                reporter.warn('  ' + why)
+                say('  ' + why)
             return result
         # STORE (guarded: OD entries may not exist in firmware yet)
         ka_q = int(round(fit['kA'] * 4096))   # Q4.12, signed (I16)
@@ -557,8 +562,10 @@ def _report_slope(reporter, r):
          'dir-spread {:.1f}°'.format(i_cal, r['off_at_ical'], r['r2A'],
                                       r['r2B'], r['angle_spread_deg']))
     if r['angle_spread_deg'] > 20.0:
-        reporter.warn('offset direction not consistent ({:.1f}° spread) -- not '
-                      'a clean fixed-direction slope.'.format(
+        # Information for the fit's verdict (effect_ok), not a warning of its
+        # own: it printed WARNING in runs that then passed.
+        reporter.note('offset direction not consistent ({:.1f}° spread) -- '
+                      'not a clean fixed-direction slope.'.format(
                           r['angle_spread_deg']))
 
 

@@ -339,5 +339,85 @@ class TestCalibrateNoGain(unittest.TestCase):
         self.assertEqual(cogging.summary(rec), rec['detail'])
 
 
+class TestStreamLost(unittest.TestCase):
+    """cogging._stream_lost: a stream that stopped is a CAN fault, named
+    as one -- node 15's bus-off read "moved 4.24 of 8 revolutions: is the
+    rotor free" (2026-11-09)."""
+
+    def frames(self, n, dt=1e-3, gap_at=None, gap_s=0.0):
+        t = np.arange(n) * dt
+        if gap_at is not None:
+            t[gap_at:] += gap_s
+        return np.column_stack([np.arange(n), np.zeros(n), np.zeros(n), t])
+
+    def lost(self, fr, span, trouble=''):
+        dev = _Dev(16)
+        dev.node.network = object()
+        with mock.patch('p4core.can_backend.bus_trouble',
+                        return_value=trouble), \
+                mock.patch('p4core.cia402.diagnose', return_value='ok'):
+            return cogging._stream_lost(dev, fr, span, {})
+
+    def test_a_full_stream_is_fine(self):
+        self.assertEqual(self.lost(self.frames(2000), 2.0), '')
+
+    def test_too_few_frames(self):
+        msg = self.lost(self.frames(800), 2.0)
+        self.assertIn('stream stopped', msg)
+        self.assertIn('CAN', msg)
+
+    def test_a_long_gap(self):
+        msg = self.lost(self.frames(2000, gap_at=1000, gap_s=0.5), 2.5)
+        self.assertIn('longest gap 0.50', msg)
+
+    def test_the_adapter_saw_bus_off(self):
+        msg = self.lost(self.frames(2000), 2.0,
+                        trouble='can0 went bus-off 1 time(s)')
+        self.assertIn('can0 went bus-off', msg)
+        self.assertIn('not the rotor', msg)
+
+
+class TestStickSlipHint(unittest.TestCase):
+    def hint(self, ff):
+        regs = {'vel_tc_ff': ff, 'vel_kp': 0.004, 'vel_ki': 3.2e-6}
+        with mock.patch.object(cogging.steptest, 'read',
+                               lambda d, k: regs[k]):
+            return cogging._stick_slip_hint(object())
+
+    def test_does_not_send_the_user_back_to_friction(self):
+        for ff in (0.0, 12.0):
+            h = self.hint(ff)
+            self.assertNotIn('run Friction calibration', h)
+            self.assertIn('Ki 3.2e-06', h)
+            self.assertIn('leave cogging out', h)
+
+
+class TestCoggingStep(unittest.TestCase):
+    """steps._r_cogging: a fit the loop cannot hold is a warning and the
+    calibration goes on; a CAN fault still fails."""
+
+    def run_step(self, exc):
+        from p4core.actuator import steps
+        s = mock.Mock(values={'pole_pairs': 7}, ctx={})
+        checks = []
+        s.rep.check = lambda *a, **k: checks.append(a)
+        with mock.patch.object(cogging, 'layout', return_value=(4, 1, 1)), \
+                mock.patch.object(cogging, 'calibrate', side_effect=exc):
+            return steps._r_cogging(s), checks
+
+    def test_stick_slip_is_a_warning(self):
+        out, checks = self.run_step(cogging.StickSlip('not steady'))
+        self.assertIn('not applied', out)
+        self.assertEqual(checks[0][:2], ('cogging', False))
+
+    def test_a_ripple_not_lowered_is_a_warning(self):
+        out, _ = self.run_step(cogging.SysidError('did not come down'))
+        self.assertIn('not applied', out)
+
+    def test_a_can_fault_fails(self):
+        with self.assertRaises(cogging.CaptureLost):
+            self.run_step(cogging.CaptureLost('bus-off'))
+
+
 if __name__ == '__main__':
     unittest.main()
