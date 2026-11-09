@@ -452,6 +452,9 @@ def make_network(can_device, bitrate=1_000_000, fd=False, data_bitrate=None,
     # can_fd switchable at run time) must not have every frame forced to FD.
     if fd and not hasattr(network, 'can_fd'):
         _enable_fd_frames(network)
+    # P4Network retries a full queue in its own send_message.
+    if not hasattr(network, 'can_fd'):
+        _tolerate_tx_backpressure(network)
     return network
 
 
@@ -474,6 +477,39 @@ def _enable_fd_frames(network):
         return _orig_send(msg, *args, **kwargs)
 
     bus.send = _send_fd
+
+
+#: How long a send waits for room in the adapter's transmit queue (s).
+TX_TIMEOUT = 0.5
+
+
+def _tolerate_tx_backpressure(network, timeout=TX_TIMEOUT):
+    """Give outgoing frames a real send timeout.
+
+    canopen's Network.send_message calls ``bus.send(msg)`` with no timeout,
+    so python-can's socketcan backend polls the socket with select(..., 0)
+    and the first moment of TX backpressure raises "Transmit buffer full".
+    The gs_usb (CANable) TX URB pool is shallow enough that the 127-frame
+    burst of ``scanner.search()`` overruns it whenever the previous burst
+    has not drained, and the scan then reported "No Pucks Found" with
+    pucks on the bus.  Waiting briefly for queue space costs nothing on a
+    healthy bus; a bus that never drains (nothing ACKs) still raises, after
+    the timeout.
+
+    Wrapped outermost (after _enable_fd_frames), and only a timeout the
+    caller did not give is filled in.  The CandleLight driver blocks on its
+    own USB write timeout and is not wrapped (make_network returns before).
+    """
+    bus = network.bus
+    _orig_send = bus.send
+
+    def _send_waiting(msg, *args, **kwargs):
+        # A positional timeout would collide with the keyword.
+        if not args and kwargs.get('timeout') is None:
+            kwargs['timeout'] = timeout
+        return _orig_send(msg, *args, **kwargs)
+
+    bus.send = _send_waiting
 
 
 # ---------------------------------------------------------------------------
