@@ -23,7 +23,7 @@ import time
 
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
-from . import cia402, ezero
+from . import cia402, ezero, nvsave
 from .flash import read_version
 from .reporter import Reporter
 
@@ -103,7 +103,7 @@ class CalibrationDeclined(CalibrationError):
 
 
 def save_single(node, index, sub):
-    node.sdo['Save']['Single'].raw = (index << 8) | sub
+    nvsave.save_single(node, index, sub)
 
 
 def firmware_version(node):
@@ -409,10 +409,6 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=100,
                               lambda f: reporter.progress(55 + int(40 * f)))
         for channel in ('Alpha', 'Beta'):
             sdo[channel]['Bias'].raw = int(round(filt[channel] * scale / 16.0))
-        save_single(node, 0x3008, 3)
-        save_single(node, 0x3009, 3)
-        if ref_cal is not None:
-            save_single(node, *REF_CAL)
         a_bias = sdo['Alpha']['Bias'].raw / scale
         b_bias = sdo['Beta']['Bias'].raw / scale
     finally:
@@ -420,6 +416,12 @@ def calibrate_bias(node, reporter=None, settle_s=1.0, samples=100,
             sdo['SetModeOfOperation'].raw = MODE_IDLE
         except Exception:
             pass
+    # Saved in IDLE: firmware that refuses a save while the bridge switches
+    # (0x08000022) would refuse it in phase-voltage-angle mode.
+    save_single(node, 0x3008, 3)
+    save_single(node, 0x3009, 3)
+    if ref_cal is not None:
+        save_single(node, *REF_CAL)
     reporter.progress(100)
     lo = BIAS_MIDPOINT * (1 - tolerance)
     hi = BIAS_MIDPOINT * (1 + tolerance)

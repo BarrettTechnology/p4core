@@ -120,6 +120,14 @@ class SimPuck(FakeNode):
         self.hook_read('Beta', 'Filtered', lambda: self._sense(math.sin, 1))
         self.turns = 0.0
         self.last_theta = 0
+        # As stm32 september-release: a save while the bridge switches (any
+        # mode but IDLE) is refused with 0x08000022.
+        for sub in ('All', 'Single'):
+            self.hook_write('Save', sub, self._refuse_while_driving)
+
+    def _refuse_while_driving(self, value):
+        if self.get('SetModeOfOperation'):
+            raise SdoAbortedError(0x08000022)
 
     def _ud(self):
         return self.get('Motor', 'ud') if self.get('SetModeOfOperation') == 12 else 0

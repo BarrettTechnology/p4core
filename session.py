@@ -568,7 +568,7 @@ class Session:
     def save_single(self, index, sub, node=None):
         """Save one object to NVM (Save.Single takes (index << 8) | sub)."""
         node = node or self.require_node()
-        node.sdo['Save']['Single'].raw = (index << 8) | sub
+        nvsave.save_single(node, index, sub)
 
     def read_version(self, node_id=None):
         """The application's 0x100A version string, read raw (EDS-proof)."""

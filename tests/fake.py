@@ -60,6 +60,13 @@ class FakeSdo:
             return hook()
         if key not in self.node.values:
             raise SdoAbortedError(0x06020000)
+        if key[0] == 0x1010:
+            # A save sub reads its status, not what was written: bit 0 (saves
+            # on command), and bit 2 (save pending) for the first read after
+            # a save, as the STM32 shows a queued flash write (nvsave polls it).
+            pending = self.node.save_pending
+            self.node.save_pending = False
+            return 1 | (4 if pending else 0)
         return self.node.values[key]
 
     def write(self, key, value):
@@ -67,6 +74,8 @@ class FakeSdo:
         if key in self.node.readonly:
             raise SdoAbortedError(0x06010002)
         self.node.values[key] = value
+        if key[0] == 0x1010:
+            self.node.save_pending = True
         hook = self.node.write_hooks.get(key)
         if hook:
             hook(value)
@@ -106,6 +115,7 @@ class FakeNode:
         self.read_hooks = {}
         self.write_hooks = {}
         self.reads, self.writes, self.downloads = [], [], []
+        self.save_pending = False
         self.sdo = FakeSdo(self)
 
     def key(self, name, sub=None):

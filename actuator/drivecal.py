@@ -9,6 +9,7 @@ These are the pieces more than one of them needs.
 from p4core.calibrate import firmware_version, read_bus_v
 from p4core.can_backend import sdo_contention_message
 from p4core.cia402 import MODE_IDLE
+from p4core import nvsave
 from p4core.reporter import Reporter
 
 from .device import SysidError
@@ -27,7 +28,7 @@ def fw_at_least(node, major, minor, patch):
 
 
 def save_single(node, index, sub):
-    node.sdo['Save']['Single'].raw = (index << 8) | sub
+    nvsave.save_single(node, index, sub)
 
 
 def clear_offset_reg(node):

@@ -24,6 +24,7 @@ import math
 import struct
 
 from canopen.sdo.exceptions import SdoAbortedError
+from p4core import nvsave
 from p4core.calibrate import has_rated_units, read_kt, write_kt
 
 from . import fits
@@ -553,12 +554,12 @@ def write_od(dev, od, keys=None, save=False):
                          'not stored'.format(idx, sub, key))
                 continue
             if save:
-                dev.node.sdo['Save']['Single'].raw = (idx << 8) | sub
+                nvsave.save_single(dev.node, idx, sub)
         else:
             _od_var(dev.node, key).raw = value
             if save:
                 idx, sub, _ = OD_MAP[key]
-                dev.node.sdo['Save']['Single'].raw = (idx << 8) | sub
+                nvsave.save_single(dev.node, idx, sub)
         dev._log('commission: {} = {}{}'.format(key, od[key],
                                                 ' (saved)' if save else ''))
 

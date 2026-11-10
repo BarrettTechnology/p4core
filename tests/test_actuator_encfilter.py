@@ -17,6 +17,8 @@ class _Sdo:
         self.saved = []
 
     def upload(self, index, sub):
+        if index == 0x1010 and sub != 5:
+            return struct.pack('<I', 1)     # a save's status: committed
         if (index, sub) not in self.od:
             raise KeyError((index, sub))
         v = self.od[(index, sub)]
@@ -24,6 +26,9 @@ class _Sdo:
                            else '<I', v)
 
     def download(self, index, sub, data):
+        if (index, sub) == (0x1010, 4):     # nvsave.save_single
+            self.saved.append(struct.unpack('<I', data)[0])
+            return
         self.od[(index, sub)] = data[0] if len(data) == 1 else \
             struct.unpack('<I', data)[0]
 

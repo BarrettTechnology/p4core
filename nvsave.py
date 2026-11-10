@@ -10,6 +10,7 @@ changed and leaves the rest of NV alone:
   save_comm       Comm (0x1000-0x1FFF): what a node ID change rewrites.
   save_all        All: a config CSV, which holds rows in every range.  Reboot
                   before loading one, so RAM holds only NV and the file.
+  save_single     One row (Save.Single), for a calibration result.
 
 Older firmware has no Mfg save (0x1010,5), and its App and Comm saves answer
 success and store nothing, so there these all fall back to Save.All.
@@ -67,14 +68,14 @@ class SaveTimeout(SdoCommunicationError if SdoCommunicationError is not Exceptio
     """0x1010,<sub> still showed the save pending at the deadline."""
 
 
-def _save(node, sub):
+def _save(node, sub, value=SAVE_SIGNATURE):
     sdo = node.sdo
     old = getattr(sdo, 'RESPONSE_TIMEOUT', None)
     try:
         if old is not None and old < TIMEOUT_S:
             sdo.RESPONSE_TIMEOUT = TIMEOUT_S
         try:
-            sdo.download(0x1010, sub, SAVE_SIGNATURE.to_bytes(4, 'little'))
+            sdo.download(0x1010, sub, value.to_bytes(4, 'little'))
         except SdoAbortedError as exc:
             if getattr(exc, 'code', None) == ABORT_DEVICE_STATE:
                 raise SaveRefused(getattr(node, 'id', '?'), sub) from exc
@@ -158,3 +159,10 @@ def save_comm(node):
 def save_all(node):
     """Store every NV row: for a config CSV, after a reboot before the load."""
     _save(node, ALL)
+
+
+def save_single(node, index, sub):
+    """Store one row (Save.Single: 0x1010,4 = index << 8 | sub), waited for
+    like every save.  A burst of these once starved the STM32 IWDG; the wait
+    for each commit spaces them out."""
+    _save(node, SINGLE, (index << 8) | sub)
