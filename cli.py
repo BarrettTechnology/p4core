@@ -147,13 +147,16 @@ class NoDevice(RuntimeError):
 
 
 def resolve_node(session, node_id, reporter):
-    """*node_id* if given (and on the bus), else the only puck found."""
-    found = session.found_ids or session.scan()
+    """*node_id* if given (and it answers), else the only puck found.
+
+    With --id only that node is asked (Session.probe, one 0x1000 upload):
+    no bus scan per command."""
     if node_id is not None:
-        if node_id not in found:
-            raise NoDevice('node {} not found on {} (found {})'.format(
-                node_id, session.port, found or 'none'))
-        return node_id
+        if node_id in session.found_ids or session.probe(node_id):
+            return node_id
+        raise NoDevice('node {} not found on {} (no answer to 0x1000; '
+                       'scan lists the pucks)'.format(node_id, session.port))
+    found = session.found_ids or session.scan()
     if not found:
         raise NoDevice('no pucks found on {}'.format(session.port))
     if len(found) > 1:

@@ -46,12 +46,11 @@ def scan(session, reporter=None):
 
 
 def require_on_bus(session, node_id):
-    """Raise OperationError unless the last scan saw *node_id*."""
-    if not session.found_ids:
-        session.scan()
-    if node_id not in session.found_ids:
-        raise OperationError('node {} not found on the bus (found {})'.format(
-            node_id, session.found_ids))
+    """Raise OperationError unless *node_id* answers (the last scan saw it,
+    or it answers an 0x1000 upload: no bus scan)."""
+    if node_id not in session.found_ids and not session.probe(node_id):
+        raise OperationError('node {} not found on the bus (no answer to '
+                             '0x1000)'.format(node_id))
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +402,7 @@ def set_id(session, old_id, new_id, reporter=None):
         reporter.note('Node {} already has that ID'.format(old_id))
         return True
     require_on_bus(session, old_id)
-    if new_id in session.found_ids:
+    if new_id in session.found_ids or session.probe(new_id):
         raise OperationError('node ID {} is already in use'.format(new_id))
     was_selected = session.node is not None and session.node.id == old_id
     if was_selected:
@@ -419,8 +418,9 @@ def set_id(session, old_id, new_id, reporter=None):
     ok, _ = config_csv.remap_pdo_cob_ids(new_node, new_id, old_id=old_id,
                                          save=True, verify=True,
                                          log=reporter.note)
-    session.found_ids = sorted(
-        set(session.found_ids) - {old_id} | {new_id})
+    if session.found_ids:               # the last scan's list, kept current
+        session.found_ids = sorted(
+            set(session.found_ids) - {old_id} | {new_id})
     if ok:
         reporter.note('Node {} is now node {}; PDO COB-IDs remapped and saved'
                       .format(old_id, new_id))

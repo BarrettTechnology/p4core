@@ -5,6 +5,9 @@ import os
 import tempfile
 import threading
 import unittest
+from unittest import mock
+
+from canopen.sdo.exceptions import SdoCommunicationError
 
 import fake  # noqa: F401
 from fake import FakeNode
@@ -422,14 +425,21 @@ class FakeSession:
 
     def __init__(self, nodes):
         self.nodes = {n.id: n for n in nodes}
-        self.found_ids = sorted(self.nodes)
+        self.found_ids = []                 # not scanned yet
         self.node = None
         self.port = 'fake0'
         self.nmt = []
+        self.scans = 0
+        self.probes = []
 
     def scan(self):
+        self.scans += 1
         self.found_ids = sorted(self.nodes)
         return self.found_ids
+
+    def probe(self, node_id):
+        self.probes.append(node_id)
+        return node_id in self.nodes
 
     def add_node(self, node_id):
         if node_id not in self.nodes:
@@ -447,6 +457,9 @@ class FakeSession:
 
     def set_sync_rate(self, hz):
         pass
+
+    def reset_node(self, node_id):
+        self.nmt.append((0x81, node_id))
 
     def select_node(self, node_id):
         self.node = self.nodes[node_id]
@@ -475,7 +488,20 @@ class TestOps(unittest.TestCase):
         node = session.nodes[9]
         self.assertEqual(node.values[(0x1800, 1)], 0x189)
         self.assertEqual(session.nmt, [(0x81, 5)])
+        self.assertEqual((session.scans, session.probes), (0, [5, 9]))
+        self.assertEqual(session.found_ids, [])     # no scan to keep current
+
+    def test_set_id_keeps_a_scanned_list_current(self):
+        session = FakeSession([self.puck(5)])
+        session.scan()
+        ops.set_id(session, 5, 9, quick(RecordingReporter()))
         self.assertEqual(session.found_ids, [9])
+
+    def test_set_id_of_a_missing_node_says_so_without_a_scan(self):
+        session = FakeSession([self.puck(5)])
+        with self.assertRaisesRegex(ops.OperationError, 'node 7 not found'):
+            ops.set_id(session, 7, 9)
+        self.assertEqual(session.scans, 0)
 
     def test_set_id_refuses_taken(self):
         session = FakeSession([self.puck(5), self.puck(9)])
@@ -485,6 +511,38 @@ class TestOps(unittest.TestCase):
     def test_flash_refuses_golden(self):
         with self.assertRaises(ops.OperationError):
             ops.flash(FakeSession([]), 5, '/fw/P4-42-GOLDEN.bin')
+
+
+class TestProbe(unittest.TestCase):
+    """Session.probe: one 0x1000 upload, the node dropped again if absent."""
+
+    def session(self, answers):
+        from p4core.session import Session
+
+        class Net(dict):
+            def add_node(self, node_id, eds):
+                node = mock.Mock(id=node_id)
+                if node_id in answers:
+                    node.sdo.upload.return_value = b'\x92\x01\x02\x00'
+                else:
+                    node.sdo.upload.side_effect = SdoCommunicationError('timeout')
+                self[node_id] = node
+                return node
+
+        s = Session()
+        s.network = Net()
+        return s
+
+    def test_an_answering_node(self):
+        s = self.session({5})
+        self.assertTrue(s.probe(5))
+        s.network[5].sdo.upload.assert_called_once_with(0x1000, 0)
+        self.assertEqual(s.found_ids, [])
+
+    def test_a_silent_node_is_not_left_on_the_network(self):
+        s = self.session({5})
+        self.assertFalse(s.probe(7))
+        self.assertNotIn(7, s.network)
 
 
 class TestCli(unittest.TestCase):
@@ -506,6 +564,33 @@ class TestCli(unittest.TestCase):
                         session_factory=lambda: session)
         self.assertEqual(code, cli.EXIT_OK)
         self.assertIn(12, session.nodes)
+
+    def test_an_id_asks_that_node_only(self):
+        session = FakeSession([TestOps().puck(5), TestOps().puck(6)])
+        code = cli.main(self.parser(), ['-q', 'reset', '--id', '6'],
+                        session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual((session.scans, session.probes), (0, [6]))
+
+    def test_an_id_that_does_not_answer_is_not_found(self):
+        session = FakeSession([TestOps().puck(5)])
+        err = io.StringIO()
+        with contextlib.redirect_stdout(err), contextlib.redirect_stderr(err):
+            code = cli.main(self.parser(), ['reset', '--id', '7'],
+                            session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_NO_DEVICE)
+        self.assertIn('node 7 not found on can0', err.getvalue())
+        self.assertEqual(session.scans, 0)
+
+    def test_no_id_or_all_scans(self):
+        session = FakeSession([TestOps().puck(5)])
+        self.assertEqual(cli.main(self.parser(), ['-q', 'reset'],
+                                  session_factory=lambda: session), cli.EXIT_OK)
+        self.assertEqual((session.scans, session.probes), (1, []))
+        session = FakeSession([TestOps().puck(5), TestOps().puck(6)])
+        self.assertEqual(cli.main(self.parser(), ['-q', 'reset', '--all', '--id', '5'],
+                                  session_factory=lambda: session), cli.EXIT_OK)
+        self.assertEqual(session.scans, 1)
 
     def test_main_needs_id_with_two_pucks(self):
         ops_ = TestOps()

@@ -427,6 +427,23 @@ class Session:
             network.add_node(node_id, eds or self.eds)
         return network[node_id]
 
+    def probe(self, node_id):
+        """True when *node_id* answers one SDO upload of 0x1000 (device type).
+
+        A command that names its node asks that node only: a whole-bus
+        scan() is 127 requests, two passes and the settle wait, every time.
+        found_ids is left alone: it stays the list of the last scan."""
+        network = self._require_network()
+        added = node_id not in network
+        node = self.add_node(node_id)
+        try:
+            node.sdo.upload(0x1000, 0)
+            return True
+        except Exception:
+            if added:
+                self._forget(node_id)
+            return False
+
     def raw_node(self, node_id):
         """*node_id* with an EMPTY object dictionary, for raw SDO uploads
         that must not depend on the EDS (version reads, a flashloader).
