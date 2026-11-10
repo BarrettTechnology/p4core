@@ -16,6 +16,7 @@ are two ways of calling them.
   version(session, node_id)              firmware version and githash
   nv_save / nv_restore(session, node_id, path)   NV as JSON (p4core.nvjson)
   calibrate(session, node_id, steps)     p4core.calibrate.calibrate_all
+  serial(session, node_id, value=None)   read, or set and save, 0x1018,4
 """
 
 import collections
@@ -113,7 +114,7 @@ def format_info(result):
     lines += [
         '  Model:        {}  (product code {})'.format(
             show(result['model']), show(result['product_code'])),
-        '  Serial:       {}'.format(show(result['serial'])),
+        '  Serial:       {}'.format(serial_text(result['serial'])),
         '  PWM:          {}'.format(show(
             None if result['pwm_hz'] is None else result['pwm_hz'] / 1000.0,
             '{:.1f} kHz')),
@@ -121,6 +122,69 @@ def format_info(result):
         '  Temperature:  {}'.format(show(result['temperature_c'], '{} C')),
     ]
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Serial number, 0x1018,4
+# ---------------------------------------------------------------------------
+SERIAL_KEY = 0xA5A5A5A5
+#: An unprogrammed serial: 0xFFFFFFFF (erased NV, newer firmware) or 0.
+SERIAL_UNSET = (0, 0xFFFFFFFF)
+
+
+def serial_set(value):
+    """True for a programmed serial (not None, 0 or 0xFFFFFFFF)."""
+    return value is not None and value not in SERIAL_UNSET
+
+
+def serial_text(value):
+    """A serial for display: the number, 'not set', or 'unknown'."""
+    if value is None:
+        return 'unknown'
+    return str(value) if serial_set(value) else 'not set'
+
+
+def _read_serial(node):
+    return int.from_bytes(node.sdo.upload(0x1018, 4)[:4], 'little')
+
+
+def serial(session, node_id, value=None, reporter=None):
+    """Read 0x1018,4, or with *value* write it, read it back and save it.
+
+    A write on firmware with the serial key (firmware.serial_key) writes the
+    key 0xA5A5A5A5 first, which unlocks one serial write.  The save is the
+    communication range (nvsave.save_comm: Save.All on firmware without the
+    ranges).  0 and 0xFFFFFFFF read as 'not set' and are refused.  Returns
+    {'node_id', 'serial', 'serial_set', 'written'}."""
+    reporter = _reporter(reporter)
+    node = session.add_node(node_id)
+    if value is None:
+        current = _read_serial(node)
+        return dict(node_id=node_id, serial=current,
+                    serial_set=serial_set(current), written=False)
+    if not 0 < value < 0xFFFFFFFF:
+        raise OperationError('serial must be 1..4294967294 (0 and 0xFFFFFFFF '
+                             'mean not set), not {}'.format(value))
+    data = value.to_bytes(4, 'little')
+    keyed = firmware.serial_key(node)
+    reporter.status('Writing serial {} to node {}...'.format(value, node_id))
+    try:
+        if keyed:
+            node.sdo.download(0x1018, 4, SERIAL_KEY.to_bytes(4, 'little'))
+        node.sdo.download(0x1018, 4, data)
+    except Exception as exc:
+        if keyed or getattr(exc, 'code', None) != 0x06010002:
+            raise
+        # Locked after all (a build the version does not say has the key).
+        node.sdo.download(0x1018, 4, SERIAL_KEY.to_bytes(4, 'little'))
+        node.sdo.download(0x1018, 4, data)
+    back = _read_serial(node)
+    if back != value:
+        raise OperationError('node {} reads serial {} back, not {}'.format(
+            node_id, back, value))
+    nvsave.save_comm(node)
+    reporter.note('Node {}: serial {} saved'.format(node_id, value))
+    return dict(node_id=node_id, serial=back, serial_set=True, written=True)
 
 
 def version(session, node_id):

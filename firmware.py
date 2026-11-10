@@ -183,6 +183,22 @@ def require(node, *names, what=None):
     detect(node).require(*names, what=what)
 
 
+#: Releases whose 0x1018,4 takes the key 0xA5A5A5A5 before a serial write:
+#: 4.3.5 on the 4.3 line, 5.0.5 on.  Without it the serial is a plain RW U32.
+SERIAL_KEY_SINCE = ((4, 3, 5), (5, 0, 5))
+
+
+def serial_key(node):
+    """True when the firmware locks the serial behind the key (by version:
+    probing would mean writing the key, which sets the serial on firmware
+    without it)."""
+    v = detect(node).version
+    if v is None:
+        return False
+    line43, line50 = SERIAL_KEY_SINCE
+    return line43 <= v < CURRENT_LINE or v >= line50
+
+
 # --------------------------------------------------------------------------
 # Units that changed between the lines.  Both lines keep Rt/Lt line-to-line.
 

@@ -325,6 +325,24 @@ def _cmd_set_id(ctx):
     return EXIT_OK if ok else EXIT_FAILED
 
 
+def _serial_number(text):
+    try:
+        return int(text, 0)
+    except ValueError:
+        raise argparse.ArgumentTypeError('not a number: {}'.format(text))
+
+
+def _cmd_serial(ctx):
+    value = ctx.args.set
+    if value is not None and not ctx.reporter.confirm(
+            'Write serial {} to node {} and save it to NV?'.format(
+                value, ctx.node_id), default=True):
+        return EXIT_FAILED
+    r = ops.serial(ctx.session, ctx.node_id, value, ctx.reporter)
+    ctx.emit(r, ['node {}: serial {}'.format(r['node_id'],
+                                            ops.serial_text(r['serial']))])
+
+
 def _cmd_reset(ctx):
     for node_id in targets(ctx):
         ops.reset(ctx.session, node_id, ctx.reporter)
@@ -383,7 +401,7 @@ CALIBRATION_STEPS = [name for name, _ in _calibrate.STEPS]
 
 
 def add_common_commands(sub, only=None):
-    """Register scan/info/version/nv/flash/config/set-id/reset/wipe-nvm/calibrate
+    """Register scan/info/version/nv/flash/config/set-id/reset/serial/wipe-nvm/calibrate
     on *sub*.
 
     *only* limits it to the named commands.  Returns {name: subparser} so an
@@ -489,6 +507,13 @@ def add_common_commands(sub, only=None):
                        '~/p4-nvm-backups/node<ID>-<time>.csv)')
 
     add('reset', _cmd_reset, 'NMT-reset a puck and wait for it', all_flag=True)
+
+    p = add('serial', _cmd_serial, 'read the serial number (0x1018,4), or set '
+            'and save it', needs_node=True)
+    if p:
+        p.add_argument('--set', type=_serial_number, metavar='S',
+                       help='write S (decimal or 0x hex; not 0 or 0xFFFFFFFF), '
+                       'read it back and save it (communication range)')
 
     p = add('calibrate', _cmd_calibrate,
             'current-sense bias and gain, encoder zero (the motor turns)',

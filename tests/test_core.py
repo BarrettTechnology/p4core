@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest import mock
 
-from canopen.sdo.exceptions import SdoCommunicationError
+from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
 import fake  # noqa: F401
 from fake import FakeNode
@@ -511,6 +511,106 @@ class TestOps(unittest.TestCase):
     def test_flash_refuses_golden(self):
         with self.assertRaises(ops.OperationError):
             ops.flash(FakeSession([]), 5, '/fw/P4-42-GOLDEN.bin')
+
+
+class KeyedSerial:
+    """0x1018,4 as 4.3.5 / 5.0.5 hold it: the key unlocks one write."""
+
+    def __init__(self, node, serial=0xFFFFFFFF):
+        self.node, self.unlocked, self.value = node, False, serial
+        node.values[(0x1018, 4)] = serial
+        node.hook_write(0x1018, 4, self.write)
+
+    def write(self, value):
+        if value == ops.SERIAL_KEY:
+            self.unlocked = True
+        elif self.unlocked:
+            self.value, self.unlocked = value, False
+        else:
+            self.node.values[(0x1018, 4)] = self.value
+            raise SdoAbortedError(0x06010002)
+        self.node.values[(0x1018, 4)] = self.value
+
+
+class TestSerial(unittest.TestCase):
+    def puck(self, version=b'5.0.5', keyed=True, serial=0xFFFFFFFF):
+        node = FakeNode(5)
+        node.values[(0x100A, 0)] = version
+        node.values[(0x1010, 5)] = 1
+        node.values[(0x1000, 0)] = 0x20192
+        if keyed:
+            KeyedSerial(node, serial)
+        else:
+            node.values[(0x1018, 4)] = serial
+        return node
+
+    def saves(self, node):
+        return [k[1] for k, _ in node.writes if k[0] == 0x1010]
+
+    def test_unset_serials_read_not_set(self):
+        self.assertEqual([ops.serial_text(v) for v in (0, 0xFFFFFFFF, None, 1234)],
+                         ['not set', 'not set', 'unknown', '1234'])
+        lines = ops.format_info(dict(node_id=5, firmware='5.0.5', product_code=1,
+                                     model='P4-42', serial=0xFFFFFFFF, pwm_hz=None,
+                                     bus_voltage_v=None, temperature_c=None))
+        self.assertIn('  Serial:       not set', lines)
+
+    def test_read(self):
+        session = FakeSession([self.puck(serial=4321)])
+        r = ops.serial(session, 5)
+        self.assertEqual((r['serial'], r['serial_set'], r['written']), (4321, True, False))
+        self.assertEqual(self.saves(session.nodes[5]), [])
+
+    def test_set_writes_the_key_then_the_serial_and_saves_comm(self):
+        node = self.puck()
+        r = ops.serial(FakeSession([node]), 5, 1234)
+        self.assertEqual(r['serial'], 1234)
+        self.assertEqual([v for k, v in node.writes if k == (0x1018, 4)],
+                         [ops.SERIAL_KEY, 1234])
+        self.assertEqual(self.saves(node), [2])          # Comm
+
+    def test_firmware_without_the_key_gets_no_key(self):
+        for version in (b'5.0.4', (4 << 24 | 3 << 8 | 3).to_bytes(4, 'little')):
+            node = self.puck(version=version, keyed=False)
+            ops.serial(FakeSession([node]), 5, 99)
+            self.assertEqual([v for k, v in node.writes if k == (0x1018, 4)], [99])
+
+    def test_a_lock_the_version_did_not_predict_gets_the_key(self):
+        node = self.puck(version=b'5.0.4', keyed=True)
+        self.assertEqual(ops.serial(FakeSession([node]), 5, 77)['serial'], 77)
+
+    def test_key_by_version(self):
+        from p4core import firmware
+        for text, keyed in ((b'4.3.4', False), (b'4.3.5', True), (b'5.0.0', False),
+                            (b'5.0.4', False), (b'5.0.5', True), (b'5.1.0', True)):
+            node = FakeNode(5)
+            node.values[(0x100A, 0)] = text
+            self.assertEqual(firmware.serial_key(node), keyed, text)
+
+    def test_unset_values_are_refused(self):
+        for bad in (0, 0xFFFFFFFF, -1, 1 << 32):
+            node = self.puck()
+            with self.assertRaises(ops.OperationError):
+                ops.serial(FakeSession([node]), 5, bad)
+            self.assertEqual(node.writes, [])
+
+    def test_cli(self):
+        parser, sub = cli.make_parser('t', 'test')
+        cli.add_common_commands(sub)
+        node = self.puck()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(parser, ['--json', '-y', 'serial', '--id', '5', '--set', '0x10'],
+                            session_factory=lambda: FakeSession([node]))
+        self.assertEqual(code, cli.EXIT_OK)
+        import json
+        self.assertEqual(json.loads(out.getvalue()),
+                         dict(node_id=5, serial=16, serial_set=True, written=True))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(parser, ['serial', '--id', '5'],
+                     session_factory=lambda: FakeSession([self.puck()]))
+        self.assertEqual(out.getvalue(), 'node 5: serial not set\n')
 
 
 class TestProbe(unittest.TestCase):
