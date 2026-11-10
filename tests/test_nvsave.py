@@ -12,21 +12,34 @@ SIG = (0x65766173).to_bytes(4, 'little')
 class Sdo:
     RESPONSE_TIMEOUT = 0.3
 
-    def __init__(self, ranges):
+    def __init__(self, ranges, pending_bit=True, pending_reads=2, enabled=False):
         self.ranges = ranges
+        self.pending_bit = pending_bit      # firmware shows 0x1010 bit 2
+        self.pending_reads = pending_reads  # reads that still show it per save
+        self.enabled = enabled              # outputs on: saves refused
+        self.pending = 0
         self.saves = []
         self.timeouts = []
+        self.polls = []
         self.od = {}
 
     def upload(self, index, sub):
-        if (index, sub) == (0x1010, 5):
-            if not self.ranges:
+        if index == 0x1010:
+            if sub == 5 and not self.ranges:
                 raise SdoAbortedError(0x06020000)
-            return b'\x01\0\0\0'
+            self.polls.append(sub)
+            status = 1
+            if self.pending_bit and self.pending:
+                self.pending -= 1
+                status |= nvsave.SAVE_PENDING
+            return status.to_bytes(4, 'little')
         return self.od.get((index, sub), (0x205).to_bytes(4, 'little'))
 
     def download(self, index, sub, data):
         if index == 0x1010:
+            if self.enabled:
+                raise SdoAbortedError(0x08000022)
+            self.pending = self.pending_reads
             self.saves.append(sub)
             self.timeouts.append(self.RESPONSE_TIMEOUT)
             assert data == SIG
@@ -34,8 +47,34 @@ class Sdo:
             self.od[index, sub] = data
 
 
-def node(ranges):
-    return mock.Mock(sdo=Sdo(ranges), id=5)
+def node(ranges, **kw):
+    return mock.Mock(sdo=Sdo(ranges, **kw), id=5)
+
+
+def setUpModule():
+    # Polls sleep for real otherwise; the Polling tests use a fake clock.
+    global _sleep
+    _sleep = mock.patch.object(nvsave.time, 'sleep')
+    _sleep.start()
+
+
+def tearDownModule():
+    _sleep.stop()
+
+
+class Clock:
+    """A fake time: sleep() advances it."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
 
 
 class Saves(unittest.TestCase):
@@ -76,6 +115,102 @@ class Saves(unittest.TestCase):
         nvsave.save_settings(n)
         self.assertEqual(n.sdo.timeouts, [nvsave.TIMEOUT_S] * 2)
         self.assertEqual(n.sdo.RESPONSE_TIMEOUT, 0.3)
+
+
+class Polling(unittest.TestCase):
+    def wait(self, n, sub):
+        clock = Clock()
+        nvsave.wait_committed(n, sub, sleep=clock.sleep, clock=clock)
+        return clock
+
+    def test_reads_the_sub_until_the_pending_bit_clears(self):
+        n = node(True, pending_reads=3)
+        n.sdo.pending = 3
+        clock = self.wait(n, nvsave.APP)
+        self.assertEqual(n.sdo.polls, [nvsave.APP] * 4)
+        self.assertEqual(clock.sleeps, [nvsave.POLL_INTERVAL_S] * 3)
+
+    def test_firmware_without_the_bit_gets_one_read_and_the_fallback_wait(self):
+        n = node(True, pending_bit=False)
+        n.sdo.pending = 3
+        clock = self.wait(n, nvsave.APP)
+        self.assertEqual(n.sdo.polls, [nvsave.APP])
+        self.assertEqual(clock.sleeps, [nvsave.FALLBACK_WAIT_S])
+
+    def test_an_unreadable_sub_gets_the_fallback_wait(self):
+        n = node(True)
+        n.sdo.upload = mock.Mock(side_effect=SdoAbortedError(0x06010001))
+        clock = self.wait(n, nvsave.ALL)
+        self.assertEqual(clock.sleeps, [nvsave.FALLBACK_WAIT_S])
+
+    def test_a_bit_that_never_clears_times_out(self):
+        n = node(True)
+        n.sdo.pending = 10 ** 6
+        with self.assertRaises(nvsave.SaveTimeout) as cm:
+            self.wait(n, nvsave.MFG)
+        self.assertIn('pending', str(cm.exception))
+        self.assertTrue(isinstance(cm.exception, SdoCommunicationError))
+        # ~POLL_TIMEOUT_S of polling, not longer
+        self.assertLess(len(n.sdo.polls), nvsave.POLL_TIMEOUT_S / nvsave.POLL_INTERVAL_S + 3)
+
+    def test_save_all_gets_the_longer_deadline(self):
+        n = node(True)
+        n.sdo.pending = 10 ** 6
+        clock = Clock()
+        with self.assertRaises(nvsave.SaveTimeout):
+            nvsave.wait_committed(n, nvsave.ALL, sleep=clock.sleep, clock=clock)
+        self.assertGreaterEqual(clock.now, nvsave.POLL_TIMEOUT_ALL_S)
+
+    def test_a_busy_node_is_asked_again_until_the_deadline(self):
+        n = node(True)
+        answers = [SdoCommunicationError('busy'), (1 | 4).to_bytes(4, 'little'),
+                   (1).to_bytes(4, 'little')]
+        n.sdo.upload = mock.Mock(side_effect=answers)
+        clock = self.wait(n, nvsave.COMM)
+        self.assertEqual(clock.sleeps, [nvsave.POLL_INTERVAL_S] * 2)
+
+    def test_a_node_that_stops_answering_times_out(self):
+        n = node(True)
+        n.sdo.upload = mock.Mock(side_effect=SdoCommunicationError('gone'))
+        with self.assertRaises(nvsave.SaveTimeout):
+            self.wait(n, nvsave.COMM)
+
+    def test_every_save_polls_its_own_sub(self):
+        n = node(True)
+        nvsave.save_settings(n)
+        self.assertEqual(n.sdo.polls,
+                         [nvsave.MFG] + [nvsave.MFG] * 3 + [nvsave.APP] * 3)  # probe, then each save
+
+    def test_the_poll_runs_with_the_long_timeout(self):
+        n = node(True)
+        seen = []
+        upload = n.sdo.upload
+        n.sdo.upload = lambda i, s: (seen.append(n.sdo.RESPONSE_TIMEOUT), upload(i, s))[1]
+        nvsave.save_comm(n)
+        self.assertEqual(seen[1:], [nvsave.TIMEOUT_S] * 3)   # [0]: has_ranges
+
+
+class Refused(unittest.TestCase):
+    def test_a_save_while_enabled_says_to_disable_the_drive(self):
+        n = node(True, enabled=True)
+        with self.assertRaises(nvsave.SaveRefused) as cm:
+            nvsave.save_settings(n)
+        self.assertIn('disable the drive before saving', str(cm.exception))
+        self.assertIn('node 5', str(cm.exception))
+        self.assertIsInstance(cm.exception, SdoAbortedError)
+        self.assertEqual(cm.exception.code, 0x08000022)
+        self.assertEqual(n.sdo.polls, [nvsave.MFG])     # has_ranges only
+
+    def test_other_aborts_pass_through(self):
+        n = node(True)
+        n.sdo.download = mock.Mock(side_effect=SdoAbortedError(0x08000020))
+        with self.assertRaises(SdoAbortedError) as cm:
+            nvsave.save_all(n)
+        self.assertNotIsInstance(cm.exception, nvsave.SaveRefused)
+
+    def test_the_cli_prints_the_advice(self):
+        from p4core import cli
+        self.assertTrue(issubclass(nvsave.SaveRefused, cli.SdoError))
 
 
 class Jobs(unittest.TestCase):
