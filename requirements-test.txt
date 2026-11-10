@@ -1,0 +1,5 @@
+# Test runner for `make test` (pip install -r requirements-test.txt; the apps'
+# requirements-test.txt pins the same). pytest runs the unittest suites
+# unchanged, pytest-xdist spreads them over every CPU.
+pytest==9.2.0
+pytest-xdist==3.8.0

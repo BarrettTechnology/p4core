@@ -1,0 +1,34 @@
+# GitLab CI for p4core: `make test` on every push to a branch, every merge
+# request and every tag. Make it required for merging (Settings > Merge
+# requests > Pipelines must succeed).
+#
+# It runs in the apps' build image, burt/puck-deb-u20 (puckutility or pucktuner
+# scripts/Dockerfile.builder, built on the runner once; see their
+# .gitlab-ci.yml), whose /opt/puckbuild venv already has every dependency.
+# The tests import p4core by name from the checkout's parent directory, so
+# the project path must end in /p4core (it does: software/p4core).
+
+variables:
+  # Test workers: the runner also builds other projects, so not every CPU.
+  TEST_JOBS: "4"
+
+# One pipeline per push: a branch with an open merge request gets the merge
+# request pipeline only.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+test:
+  image: burt/puck-deb-u20
+  tags:
+    - docker
+  script:
+    # An image built before make/git/xvfb were added to Dockerfile.builder:
+    # install them for this job (rebuild the image to skip this).
+    - 'command -v make >/dev/null && command -v git >/dev/null && command -v xvfb-run >/dev/null || { echo "NOTE: burt/puck-deb-u20 predates the test tools, installing them (rebuild the image)"; apt-get update -qq && apt-get install -y -qq --no-install-recommends make git xvfb xauth >/dev/null; }'
+    - uv pip install -q --python /opt/puckbuild -r requirements-test.txt
+    - make test PYTHON=/opt/puckbuild/bin/python TEST_JOBS=$TEST_JOBS
