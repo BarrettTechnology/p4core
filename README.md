@@ -24,20 +24,30 @@ Each app is split model / controller / view:
 
     scan                         node IDs on the bus
     info [--all] [--flashloader] firmware, model, live readings
+    version [--all]              firmware version and githash (0x100A, 0x3003)
+    nv save FILE / restore FILE  every NV value as JSON, and back (Save.All, reboot)
     flash FIRMWARE [--all]       .bin / .ebin over CAN (GOLDEN images refused)
     config load CSV [--all]      download, Save.All, reboot
     config export TEMPLATE OUT   a template filled with the puck's values
     config check CSV             validate without a puck
     config templates             the shipped templates
     set-id NEW                   NetCfg, reboot, PDO COB-ID remap
+    set-id [NEW] --pdo-ids predefined
+                                 also move PDOs left on node 127's IDs; no NEW:
+                                 fix this ID's PDOs, no reboot (lists, asks)
+    serial [--set S]             read or write the serial number (0x1018,4)
     reset [--all]                NMT reset and wait
     wipe-nvm [--backup CSV]      erase NV but bus settings, reload the blank template
     calibrate [STEP...]          encoder-test, bias, gain, ezero (motor turns)
 
-with `--can PORT` (default `$P4_CAN` or `can0`), `--id N` (default: the only
-puck on the bus), `--fd`/`--classic`, `-y`, `-q`, `-v` and `--json`, before or
+with `--can PORT` (default `$P4_CAN` or `can0`), `--id N` (that node only, no
+scan; default: the only puck on the bus), `--fd`/`--classic`, `-y`, `-q`, `-v` and `--json`, before or
 after the command.  Exit codes: 0 ok, 1 failed, 2 usage, 3 no bus/puck,
 130 interrupted.
+
+A PDO COB-ID change goes through invalid (0x80000000 | new, then new): 5.x
+refuses a new identifier on a valid PDO, as CiA 301 says.  Changes are in
+`CHANGELOG.md`.
 
 ## Layout
 
