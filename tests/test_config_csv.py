@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 import fake  # noqa: F401  (puts p4core on the path)
-from fake import FakeNode
+from fake import FakeNode, cia_cob_ids
 
 from p4core import config_csv, paths
 from p4core.reporter import RecordingReporter
@@ -321,6 +321,59 @@ class TestRemap(unittest.TestCase):
         node.values[(0x1401, 1)] = 0x300 | 22
         config_csv.remap_pdo_cob_ids(node, 9, old_id=5, save=False, log=lambda s: None)
         self.assertEqual(node.values[(0x1401, 1)], 0x316)
+
+
+class TestPdoCobIds(unittest.TestCase):
+    """5.x refuses a new identifier on a valid PDO: invalid first."""
+
+    def stale(self, node_id=13, factory=127):
+        node = cia_cob_ids(FakeNode(node_id))
+        for index, base in config_csv.PDO_COB_BASES.items():
+            node.values[(index, 1)] = base | factory
+        return node
+
+    def test_valid_to_valid_goes_through_invalid(self):
+        node = self.stale()
+        ok, _ = config_csv.remap_pdo_cob_ids(node, 13, from_ids={127},
+                                             log=lambda s: None)
+        self.assertTrue(ok)
+        for index, base in config_csv.PDO_COB_BASES.items():
+            self.assertEqual(node.values[(index, 1)], base | 13)
+        writes = [d for (i, s, d) in node.downloads if (i, s) == (0x1800, 1)]
+        self.assertEqual([int.from_bytes(w, 'little') for w in writes],
+                         [0x8000018D, 0x18D])
+        self.assertTrue(any(k[0] == 0x1010 for k, _ in node.writes))  # saved
+
+    def test_a_direct_write_is_refused(self):
+        node = self.stale()
+        with self.assertRaises(Exception):
+            node.sdo.download(0x1800, 1, (0x18D).to_bytes(4, 'little'))
+
+    def test_disabled_stays_disabled_in_one_write(self):
+        node = self.stale()
+        node.values[(0x1803, 1)] = 0xC00004FF
+        config_csv.remap_pdo_cob_ids(node, 13, from_ids={127}, save=False,
+                                     log=lambda s: None)
+        self.assertEqual(node.values[(0x1803, 1)], 0xC000048D)
+        self.assertEqual(len([k for k, _ in node.writes if k == (0x1803, 1)]), 1)
+
+    def test_changes_list_only_the_named_nodes(self):
+        node = self.stale()
+        node.values[(0x1401, 1)] = 0x316         # someone's cross-link
+        node.values[(0x1402, 1)] = 0x40D         # already right
+        changes = config_csv.pdo_cob_id_changes(node, 13, {127, 13})
+        self.assertEqual([c[0] for c in changes],
+                         [0x1400, 0x1403, 0x1800, 0x1801, 0x1802, 0x1803])
+        self.assertEqual(changes[0], (0x1400, 0x27F, 0x20D))
+        self.assertEqual(node.writes, [])
+        self.assertEqual(config_csv.describe_cob_id_change(*changes[0]),
+                         'RPDO1 0x1400,1: 0x27F -> 0x20D')
+
+    def test_nothing_to_move_saves_nothing(self):
+        node = self.stale(factory=13)
+        ok, results = config_csv.remap_pdo_cob_ids(node, 13, from_ids={127},
+                                                   log=lambda s: None)
+        self.assertEqual((ok, results, node.writes), (True, [], []))
 
 
 class TestReal32(unittest.TestCase):

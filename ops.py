@@ -11,6 +11,7 @@ are two ways of calling them.
   load_config(session, node_id, csv)     download, Save.All, reboot
   export_config(session, node_id, template, out)
   set_id(session, old_id, new_id)        NetCfg, reboot, PDO COB-ID remap
+  pdo_id_changes(session, id, new_id)    what set_id would write, read-only
   reset(session, node_id)                NMT reset and wait for it
   wipe_nvm(session, node_id)             erase NV but the bus settings, reload the blank
   version(session, node_id)              firmware version and githash
@@ -451,20 +452,51 @@ def wipe_nvm(session, node_id, reporter=None, backup=None, template=True,
 # ---------------------------------------------------------------------------
 # Node ID
 # ---------------------------------------------------------------------------
-def set_id(session, old_id, new_id, reporter=None):
+#: set_id(pdo_ids=...): which PDO COB-IDs follow the node.  'follow' moves
+#: those keyed to the old node; 'predefined' also those keyed to node 127,
+#: where factory configuration ran (FM&M W5).
+PDO_ID_MODES = ('follow', 'predefined')
+FACTORY_ID = 127
+
+
+def _pdo_from_ids(old_id, pdo_ids):
+    if pdo_ids not in PDO_ID_MODES:
+        raise OperationError('pdo_ids must be one of {}, not {!r}'.format(
+            ', '.join(PDO_ID_MODES), pdo_ids))
+    return {old_id, FACTORY_ID} if pdo_ids == 'predefined' else {old_id}
+
+
+def pdo_id_changes(session, node_id, new_id=None, pdo_ids='predefined'):
+    """What set_id(node_id, new_id, pdo_ids=...) would write to the PDO
+    COB-IDs, read-only: [(index, current, target)].  For the question
+    before a set-id; config_csv.describe_cob_id_change() words each."""
+    require_on_bus(session, node_id)
+    new_id = node_id if new_id is None else new_id
+    return config_csv.pdo_cob_id_changes(
+        session.add_node(node_id), new_id, _pdo_from_ids(node_id, pdo_ids))
+
+
+def set_id(session, old_id, new_id, reporter=None, pdo_ids='follow'):
     """Move a puck from *old_id* to *new_id*.
 
     NetCfg self-persists and takes effect at the next boot, so: write it,
-    NMT-reset, wait for the puck on the new ID, then remap the 8 PDO COB-IDs
-    (the firmware does not re-derive them) and save them.  Returns True when
-    the remap verified.
+    NMT-reset, wait for the puck on the new ID, then move the PDO COB-IDs
+    keyed to the old node (4.3.x leaves them; 5.x moves its old predefined
+    ones itself) and save them.  pdo_ids='predefined' also moves those keyed
+    to node 127, and with new_id == old_id does only that, without a reboot.
+    Returns True when the COB-IDs verified.
     """
     reporter = _reporter(reporter)
     if not 1 <= new_id <= 127:
         raise OperationError('node ID must be 1..127, not {}'.format(new_id))
+    from_ids = _pdo_from_ids(old_id, pdo_ids)
     if new_id == old_id:
-        reporter.note('Node {} already has that ID'.format(old_id))
-        return True
+        if pdo_ids == 'follow':
+            reporter.note('Node {} already has that ID'.format(old_id))
+            return True
+        require_on_bus(session, old_id)
+        return _remap_pdo_ids(session.add_node(old_id), old_id, from_ids,
+                              reporter)
     require_on_bus(session, old_id)
     if new_id in session.found_ids or session.probe(new_id):
         raise OperationError('node ID {} is already in use'.format(new_id))
@@ -479,20 +511,27 @@ def set_id(session, old_id, new_id, reporter=None):
     if was_selected:
         session.node = None
     new_node = _wait_for_application(session, new_id, reporter)
-    ok, _ = config_csv.remap_pdo_cob_ids(new_node, new_id, old_id=old_id,
-                                         save=True, verify=True,
-                                         log=reporter.note)
     if session.found_ids:               # the last scan's list, kept current
         session.found_ids = sorted(
             set(session.found_ids) - {old_id} | {new_id})
-    if ok:
-        reporter.note('Node {} is now node {}; PDO COB-IDs remapped and saved'
-                      .format(old_id, new_id))
-    else:
-        reporter.warn('Node ID changed, but the PDO COB-IDs did not all '
-                      'verify: load the configuration to repair them')
+    reporter.note('Node {} is now node {}'.format(old_id, new_id))
+    ok = _remap_pdo_ids(new_node, new_id, from_ids, reporter)
     if was_selected:
         session.select_node(new_id)
+    return ok
+
+
+def _remap_pdo_ids(node, new_id, from_ids, reporter):
+    ok, results = config_csv.remap_pdo_cob_ids(
+        node, new_id, from_ids=from_ids, save=True, verify=True,
+        log=reporter.note)
+    if not results and ok:
+        reporter.note('PDO COB-IDs: nothing to move')
+    elif ok:
+        reporter.note('PDO COB-IDs moved to node {} and saved'.format(new_id))
+    else:
+        reporter.warn('The PDO COB-IDs did not all verify: load the '
+                      'configuration to repair them')
     return ok
 
 

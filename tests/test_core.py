@@ -10,7 +10,7 @@ from unittest import mock
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
 import fake  # noqa: F401
-from fake import FakeNode
+from fake import FakeNode, cia_cob_ids
 
 from p4core import app_settings, calibrate, cli, ezero, flash, ops, paths
 from p4core.reporter import Aborted, ConsoleReporter, RecordingReporter, Reporter
@@ -516,6 +516,50 @@ class TestOps(unittest.TestCase):
         with self.assertRaises(ops.OperationError):
             ops.set_id(session, 5, 9)
 
+    def factory_puck(self, node_id):
+        """Configured at node 127, re-IDed by a tool that left the PDOs."""
+        node = cia_cob_ids(self.puck(node_id))
+        for index, base in ops.config_csv.PDO_COB_BASES.items():
+            node.values[(index, 1)] = base | 127
+        node.values[(0x1801, 1)] = 0x300 | 22    # someone's cross-link
+        return node
+
+    def test_predefined_fixes_this_id_without_a_reboot(self):
+        session = FakeSession([self.factory_puck(13)])
+        rep = quick(RecordingReporter())
+        changes = ops.pdo_id_changes(session, 13)
+        self.assertEqual(len(changes), 7)
+        self.assertTrue(ops.set_id(session, 13, 13, rep, pdo_ids='predefined'))
+        node = session.nodes[13]
+        self.assertEqual(node.values[(0x1800, 1)], 0x18D)
+        self.assertEqual(node.values[(0x1403, 1)], 0x50D)
+        self.assertEqual(node.values[(0x1801, 1)], 0x316)
+        self.assertEqual(session.nmt, [])
+        self.assertTrue(any(k[0] == 0x1010 for k, _ in node.writes))
+
+    def test_predefined_with_a_new_id(self):
+        session = FakeSession([self.factory_puck(13)])
+        self.assertTrue(ops.set_id(session, 13, 14, quick(RecordingReporter()),
+                                   pdo_ids='predefined'))
+        node = session.nodes[14]
+        self.assertEqual(node.values[(0x1400, 1)], 0x20E)
+        self.assertEqual(session.nmt, [(0x81, 13)])
+
+    def test_follow_leaves_node_127s(self):
+        session = FakeSession([self.factory_puck(13)])
+        ops.set_id(session, 13, 14, quick(RecordingReporter()))
+        self.assertEqual(session.nodes[14].values[(0x1800, 1)], 0x1FF)
+
+    def test_set_id_on_a_strict_node(self):
+        session = FakeSession([cia_cob_ids(self.puck(5))])
+        self.assertTrue(ops.set_id(session, 5, 9, quick(RecordingReporter())))
+        self.assertEqual(session.nodes[9].values[(0x1803, 1)], 0x489)
+
+    def test_unknown_pdo_mode(self):
+        session = FakeSession([self.puck(5)])
+        with self.assertRaises(ops.OperationError):
+            ops.set_id(session, 5, 5, pdo_ids='bogus')
+
     def test_flash_refuses_golden(self):
         with self.assertRaises(ops.OperationError):
             ops.flash(FakeSession([]), 5, '/fw/P4-42-GOLDEN.bin')
@@ -672,6 +716,30 @@ class TestCli(unittest.TestCase):
                         session_factory=lambda: session)
         self.assertEqual(code, cli.EXIT_OK)
         self.assertIn(12, session.nodes)
+
+    def test_set_id_pdo_ids_predefined_asks(self):
+        session = FakeSession([TestOps().factory_puck(13)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = cli.main(self.parser(), ['set-id', '--id', '13',
+                                            '--pdo-ids', 'predefined'],
+                            session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_FAILED)          # no --yes, no tty
+        self.assertIn('TPDO1 0x1800,1: 0x1FF -> 0x18D', out.getvalue())
+        self.assertEqual(session.nodes[13].values[(0x1800, 1)], 0x1FF)
+        code = cli.main(self.parser(), ['-q', '-y', 'set-id', '--id', '13',
+                                        '--pdo-ids', 'predefined'],
+                        session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertEqual(session.nodes[13].values[(0x1800, 1)], 0x18D)
+
+    def test_set_id_needs_a_new_id_unless_predefined(self):
+        session = FakeSession([TestOps().puck(5)])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = cli.main(self.parser(), ['set-id', '--id', '5'],
+                            session_factory=lambda: session)
+        self.assertEqual(code, cli.EXIT_USAGE)
 
     def test_an_id_asks_that_node_only(self):
         session = FakeSession([TestOps().puck(5), TestOps().puck(6)])

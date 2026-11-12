@@ -321,7 +321,27 @@ def _cmd_config_templates(ctx):
 
 
 def _cmd_set_id(ctx):
-    ok = ops.set_id(ctx.session, ctx.node_id, ctx.args.new_id, ctx.reporter)
+    new_id, mode = ctx.args.new_id, ctx.args.pdo_ids
+    if new_id is None and mode != 'predefined':
+        ctx.reporter.warn('set-id needs a NEW_ID (or --pdo-ids predefined '
+                           'to fix the PDO COB-IDs of this ID)')
+        return EXIT_USAGE
+    if new_id is None:
+        new_id = ctx.node_id
+    if mode == 'predefined':
+        changes = ops.pdo_id_changes(ctx.session, ctx.node_id, new_id, mode)
+        for c in changes:
+            ctx.reporter.note('  ' + config_csv.describe_cob_id_change(*c))
+        if not changes and new_id == ctx.node_id:
+            ctx.reporter.note('Node {}: PDO COB-IDs already predefined'
+                              .format(ctx.node_id))
+            return EXIT_OK
+        if changes and not ctx.reporter.confirm(
+                'Write these {} PDO COB-ID(s) to node {} and save them '
+                '(Save.Comm)?'.format(len(changes), ctx.node_id)):
+            return EXIT_FAILED
+    ok = ops.set_id(ctx.session, ctx.node_id, new_id, ctx.reporter,
+                    pdo_ids=mode)
     return EXIT_OK if ok else EXIT_FAILED
 
 
@@ -491,7 +511,15 @@ def add_common_commands(sub, only=None):
     p = add('set-id', _cmd_set_id, "change a puck's node ID (and its PDO COB-IDs)",
             needs_node=True)
     if p:
-        p.add_argument('new_id', type=int)
+        p.add_argument('new_id', type=int, nargs='?', metavar='NEW_ID',
+                       help='omit with --pdo-ids predefined to fix the PDO '
+                       'COB-IDs of the current ID only')
+        p.add_argument('--pdo-ids', choices=ops.PDO_ID_MODES,
+                       default='follow',
+                       help="follow (default): move the PDO COB-IDs keyed to "
+                       "the old node.  predefined: also those keyed to node "
+                       "{} (factory configuration); lists them and asks "
+                       "(--yes)".format(ops.FACTORY_ID))
 
     p = add('wipe-nvm', _cmd_wipe_nvm,
             'erase NV but communication, identity, node ID and CAN termination, '

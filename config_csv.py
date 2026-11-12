@@ -24,6 +24,8 @@ pandas-based configtest.build_csv:
                                gains, PMSM parameters, limits
   remap_pdo_cob_ids(node, new_id, old_id)
                                the PDO part of a node-ID change
+  pdo_cob_id_changes(node, new_id, from_ids)
+                               what a remap would write, read-only
 """
 
 import ast
@@ -885,67 +887,84 @@ PDO_COB_BASES = {
 _PDO_VALID_BIT = 0x80000000    # bit31: 1 = PDO invalid/disabled
 
 
+def pdo_cob_id_changes(node, new_id, from_ids):
+    """The PDO COB-ID writes that would put the PDOs whose node field is in
+    *from_ids* on *new_id*: [(index, current, target)], one per PDO that
+    would change.  The function code becomes the predefined one and the high
+    bits (bit 31 valid, bit 30 RTR) stay, so a disabled PDO stays disabled.
+    A PDO keyed to any other node is someone's configuration: left alone.
+    Raises if a COB-ID cannot be read."""
+    from_ids = {i & 0x7F for i in from_ids}
+    changes = []
+    for index, base in sorted(PDO_COB_BASES.items()):
+        cur = int.from_bytes(node.sdo.upload(index, 1)[:4], 'little')
+        if (cur & 0x7F) not in from_ids:
+            continue
+        target = (cur & ~0x7FF) | base | (new_id & 0x7F)
+        if target != cur:
+            changes.append((index, cur, target))
+    return changes
+
+
+def describe_cob_id_change(index, cur, target):
+    kind = 'RPDO' if index < 0x1800 else 'TPDO'
+    off = ' (disabled)' if target & _PDO_VALID_BIT else ''
+    return '{}{} {:#06x},1: 0x{:03X} -> 0x{:03X}{}'.format(
+        kind, (index & 0xF) + 1, index, cur & 0x7FF, target & 0x7FF, off)
+
+
+def write_cob_id(node, index, cur, target):
+    """Write a PDO COB-ID.  CiA 301 (and 5.x, which aborts 0x06090030) refuse
+    a new identifier on a valid PDO, so a valid -> valid change goes through
+    invalid first: 0x80000000 | target, then target.  4.3.x takes either."""
+    if not (cur | target) & _PDO_VALID_BIT and (cur ^ target) & 0x7FF:
+        node.sdo.download(index, 1, (target | _PDO_VALID_BIT).to_bytes(4, 'little'))
+    node.sdo.download(index, 1, target.to_bytes(4, 'little'))
+
+
 def remap_pdo_cob_ids(node, new_id, old_id=None, save=True, verify=True,
-                      log=print):
-    """Rewrite a node's 8 PDO comm-param COB-IDs to match `new_id` -- the standalone
-    equivalent of the config CSV's `<base> | $ID` templating, for use right after a
-    Set-ID change (this does NOT change the node ID itself).
+                      log=print, from_ids=None):
+    """Move a node's PDO COB-IDs to `new_id` -- the standalone equivalent of
+    the config CSV's `<base> | $ID` templating, for use after a Set-ID change
+    (this does NOT change the node ID itself).
 
-    Grounded in scripts/pdo_persistence_probe.py findings on P4 firmware:
-      * A bare Set-ID (NetCfg + reset) leaves all 8 COB-IDs at `base | old_id` -- the
-        firmware does NOT re-derive them from the node id -- so this remap is required.
-      * sub1 is writable DIRECTLY while the PDO is valid (no CiA-301 disable/bit31 dance
-        needed); a disable->write->enable fallback is kept in case a verify misses on
-        other firmware/PDO states.
-      * A plain write is RAM-only and reverts on reboot, so an explicit Save
-        of communication (nvsave.save_comm) IS REQUIRED to commit to NV -- hence
-        save=True default.
+    * A bare Set-ID (NetCfg + reset) on 4.3.x leaves all 8 COB-IDs at
+      `base | old_id`; 5.x moves those that equal the old node's predefined
+      ones at boot (parseReloadCanId), which leaves this nothing to do.
+    * A plain write is RAM-only, so an explicit Save of communication
+      (nvsave.save_comm) commits it -- hence save=True.
 
-    Reads each entry and preserves its high bits, so it self-corrects and tolerates any
-    PDO layout. Only remaps PDOs currently keyed to `old_id` (when given), leaving any
-    deliberately cross-linked PDO untouched.
-
-    Returns (ok, results) where results is a list of (index, target_or_None, readback).
+    Only PDOs whose node field is in *from_ids* (default: {old_id}, or every
+    PDO when neither is given) move; see pdo_cob_id_changes().  Logs each
+    change.  Returns (ok, results), results a list of (index, target, readback).
     """
-    def _readback(index, base):
-        rb = int.from_bytes(node.sdo.upload(index, 1), 'little', signed=False)
-        return rb, (rb & 0x7FF) == (base | (new_id & 0x7F))
-
+    if from_ids is None:
+        from_ids = range(128) if old_id is None else {old_id}
+    try:
+        changes = pdo_cob_id_changes(node, new_id, from_ids)
+    except Exception as e:
+        log("  remap: COB-ID read failed ({})".format(e))
+        return False, []
     results = []
     ok = True
-    for index, base in sorted(PDO_COB_BASES.items()):
-        try:
-            cur = int.from_bytes(node.sdo.upload(index, 1), 'little', signed=False)
-        except Exception as e:
-            log("  remap {:#06x}: read failed ({})".format(index, e))
-            ok = False; results.append((index, None, None)); continue
-        if old_id is not None and (cur & 0x7F) != (old_id & 0x7F):
-            log("  remap {:#06x}: node field 0x{:02X} != old id 0x{:02X}; leaving alone"
-                .format(index, cur & 0x7F, old_id & 0x7F))
-            results.append((index, None, cur)); continue
-        target = (cur & ~0x7FF) | base | (new_id & 0x7F)   # keep valid/RTR bits, set func+node
+    for index, cur, target in changes:
         rb = None
         try:
-            node.sdo.download(index, 1, target.to_bytes(4, 'little'))   # direct write (confirmed OK)
+            write_cob_id(node, index, cur, target)
             if verify:
-                rb, good = _readback(index, base)
-                if not good:
-                    log("  remap {:#06x}: direct verify miss (0x{:03X}); disable->write->enable"
-                        .format(index, rb & 0x7FF))
-                    node.sdo.download(index, 1, (cur | _PDO_VALID_BIT).to_bytes(4, 'little'))
-                    node.sdo.download(index, 1, (target | _PDO_VALID_BIT).to_bytes(4, 'little'))
-                    node.sdo.download(index, 1, (target & ~_PDO_VALID_BIT).to_bytes(4, 'little'))
-                    rb, good = _readback(index, base)
-                    if not good:
-                        log("  remap {:#06x}: VERIFY MISMATCH wrote cob 0x{:03X} read 0x{:03X}"
-                            .format(index, base | (new_id & 0x7F), rb & 0x7FF))
-                        ok = False
+                rb = int.from_bytes(node.sdo.upload(index, 1)[:4], 'little')
+                if rb != target:
+                    log("  remap {:#06x}: VERIFY MISMATCH wrote 0x{:08X} read 0x{:08X}"
+                        .format(index, target, rb))
+                    ok = False
         except Exception as e:
             log("  remap {:#06x}: write failed ({})".format(index, e))
-            ok = False; results.append((index, target, rb)); continue
+            ok = False
+        else:
+            log("  " + describe_cob_id_change(index, cur, target))
         results.append((index, target, rb))
 
-    if save:
+    if save and changes:
         try:
             nvsave.save_comm(node)   # commit RAM -> NV
         except Exception as e:

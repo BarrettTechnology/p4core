@@ -73,6 +73,11 @@ class FakeSdo:
         self.node.writes.append((key, value))
         if key in self.node.readonly:
             raise SdoAbortedError(0x06010002)
+        check = self.node.write_checks.get(key)
+        if check:
+            code = check(self.node.values.get(key), value)
+            if code:
+                raise SdoAbortedError(code)
         self.node.values[key] = value
         if key[0] == 0x1010:
             self.node.save_pending = True
@@ -114,6 +119,7 @@ class FakeNode:
         self.readonly = set()
         self.read_hooks = {}
         self.write_hooks = {}
+        self.write_checks = {}      # key: fn(old, new) -> abort code or None
         self.reads, self.writes, self.downloads = [], [], []
         self.save_pending = False
         self.sdo = FakeSdo(self)
@@ -135,6 +141,26 @@ class FakeNode:
 
     def hook_write(self, name, sub, fn):
         self.write_hooks[self.key(name, sub)] = fn
+
+
+def _cob_id_check(was, now):
+    """stm32 5.x parseCobIdCheck(): no new identifier on a valid PDO."""
+    if isinstance(was, (bytes, bytearray)):
+        was = int.from_bytes(was[:4], 'little')
+    if isinstance(now, (bytes, bytearray)):
+        now = int.from_bytes(now[:4], 'little')
+    if was is None or now & 0x80000000 or was & 0x80000000:
+        return None
+    return 0x06090030 if (was ^ now) & 0x7FF else None
+
+
+def cia_cob_ids(node):
+    """Make *node*'s 8 PDO COB-IDs refuse a valid -> valid identifier change,
+    as 5.x does (CiA 301 7.5.2.35)."""
+    for index in (0x1400, 0x1401, 0x1402, 0x1403,
+                  0x1800, 0x1801, 0x1802, 0x1803):
+        node.write_checks[(index, 1)] = _cob_id_check
+    return node
 
 
 #: 0x100A of a 4.3.5 application: the packed U32 (major << 24 | minor << 8 |
