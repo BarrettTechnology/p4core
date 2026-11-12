@@ -1,14 +1,14 @@
 [FileInfo]
-FileName=puck4-505.eds
+FileName=puck4.eds
 FileVersion=5
 FileRevision=0
 EDSVersion=4.0
-Description=Barrett Puck 4 PMSM motor controller (firmware 5.0.4)
-CreationTime=10:00PM
-CreationDate=11-05-2026
+Description=Barrett Puck 4 PMSM motor controller (firmware 5.0.6)
+CreationTime=03:26PM
+CreationDate=11-12-2026
 CreatedBy=scripts/gen_eds.py
-ModificationTime=10:00PM
-ModificationDate=11-05-2026
+ModificationTime=03:26PM
+ModificationDate=11-12-2026
 ModifiedBy=scripts/gen_eds.py
 
 [DeviceInfo]
@@ -45,7 +45,8 @@ Dummy0006=1
 Dummy0007=1
 
 [Comments]
-Lines=0
+Lines=1
+Line1=0x1003 (CiA 301 7.5.2.4): sub 0 is the number of errors recorded, newest at sub 1; subs above 0x1003,0 abort 0800 0024h (no data available). Read 0x1003,0 first.
 
 [MandatoryObjects]
 SupportedObjects=3
@@ -498,21 +499,21 @@ ParameterName=SerialNumber
 ObjectType=0x07
 DataType=0x0007
 AccessType=rw
-DefaultValue=0
+DefaultValue=4294967295
 
 [1018sub5]
 ParameterName=MachineCode
 ObjectType=0x07
 DataType=0x0007
 AccessType=rw
-DefaultValue=0
+DefaultValue=4294967295
 
 [1018sub6]
 ParameterName=RoleCode
 ObjectType=0x07
 DataType=0x0007
 AccessType=rw
-DefaultValue=0
+DefaultValue=4294967295
 
 [1029]
 ParameterName=ErrorBehavior
@@ -3262,14 +3263,14 @@ DefaultValue=0
 [3015]
 ParameterName=CurrentInjection
 ObjectType=0x09
-SubNumber=23
+SubNumber=19
 
 [3015sub0]
 ParameterName=NumberOfEntries
 ObjectType=0x07
 DataType=0x0005
 AccessType=ro
-DefaultValue=22
+DefaultValue=18
 
 [3015sub1]
 ParameterName=ModeOff
@@ -3395,34 +3396,6 @@ ParameterName=DragDampingGainQ8
 ObjectType=0x07
 DataType=0x0006
 AccessType=rw
-DefaultValue=0
-
-[3015sub13]
-ParameterName=StepPulseLength
-ObjectType=0x07
-DataType=0x0006
-AccessType=rw
-DefaultValue=0
-
-[3015sub14]
-ParameterName=IsenseBurstSampleIndex
-ObjectType=0x07
-DataType=0x0005
-AccessType=rw
-DefaultValue=0
-
-[3015sub15]
-ParameterName=IsenseBurstSampleAt
-ObjectType=0x07
-DataType=0x0007
-AccessType=ro
-DefaultValue=0
-
-[3015sub16]
-ParameterName=IsenseBurstSamplesTaken
-ObjectType=0x07
-DataType=0x0005
-AccessType=ro
 DefaultValue=0
 
 [3016]
