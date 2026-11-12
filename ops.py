@@ -522,9 +522,10 @@ def set_id(session, old_id, new_id, reporter=None, pdo_ids='follow'):
 
 
 def _remap_pdo_ids(node, new_id, from_ids, reporter):
+    def log(text):         # each move at -v (the CLI lists them first)
+        (reporter.warn if 'remap' in text else reporter.detail)(text.strip())
     ok, results = config_csv.remap_pdo_cob_ids(
-        node, new_id, from_ids=from_ids, save=True, verify=True,
-        log=reporter.note)
+        node, new_id, from_ids=from_ids, save=True, verify=True, log=log)
     if not results and ok:
         reporter.note('PDO COB-IDs: nothing to move')
     elif ok:
