@@ -123,12 +123,13 @@ class TestSavedWhenItPasses(AutosaveCase):
 
 class TestAFailure(AutosaveCase):
     def test_keeps_what_passed_and_saves_nothing_of_its_own(self):
-        s = self.session(('a', writes), ('cogging', fails_after_writing),
+        # A core step (winding): the run stops there.
+        s = self.session(('a', writes), ('winding', fails_after_writing),
                          ('c', writes))
-        self.assertFalse(s.run(['a', 'cogging', 'c']))
+        self.assertFalse(s.run(['a', 'winding', 'c']))
         self.assertEqual(self.events, ['save'])   # a's alone
         self.assertEqual(s.results['a']['status'], 'pass')
-        self.assertEqual(s.results['cogging']['status'], 'fail')
+        self.assertEqual(s.results['winding']['status'], 'fail')
         self.assertEqual(s.results['c']['status'], 'skipped')
         self.assertFalse(s.unsaved)               # nothing good is at risk
 
@@ -297,3 +298,32 @@ class TestInStepSaves(AutosaveCase):
             calibrate.save_single_now(node, 0x2100, 2)
         self.assertEqual(pending, [])
         self.assertEqual(self.events, [('single', 0x2100, 2)])
+
+
+class TestARefinementFailure(AutosaveCase):
+    """A failed refinement (friction, cogging, ...) leaves the drive on its previous values;
+    the run goes on (BO3518: a slipping drag stopped two of three runs before any refine)."""
+
+    def test_the_run_goes_on_and_reports_it(self):
+        s = self.session(('a', writes), ('friction', fails_after_writing),
+                         ('position_refine', writes))
+        self.assertFalse(s.run(['a', 'friction', 'position_refine']))   # reported...
+        self.assertEqual(s.results['friction']['status'], 'fail')
+        self.assertEqual(s.results['position_refine']['status'], 'pass')   # ...but went on
+        self.assertEqual(s.tolerated, ['friction'])
+        self.assertEqual(self.events, ['save', 'save'])   # a's and position_refine's
+
+    def test_a_save_failure_still_stops(self):
+        def save_fails(s):
+            s.unsaved = True
+            raise steps._SaveFailed('flash')
+        s = self.session(('cogging', save_fails), ('position_refine', writes))
+        self.assertFalse(s.run(['cogging', 'position_refine']))
+        self.assertEqual(s.results['position_refine']['status'], 'skipped')
+
+    def test_a_can_fault_still_stops(self):
+        def lost(s):
+            raise steps.cogging.CaptureLost('bus-off')
+        s = self.session(('cogging', lost), ('position_refine', writes))
+        self.assertFalse(s.run(['cogging', 'position_refine']))
+        self.assertEqual(s.results['position_refine']['status'], 'skipped')

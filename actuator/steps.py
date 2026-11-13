@@ -232,6 +232,7 @@ class Session:
         self.log = log or dev._log
         self.rep = commission._Report(dev)
         self.results = {}            # key -> {'status', 'detail', 'result'}
+        self.tolerated = []          # refinement steps that failed while the run went on
         self.unsaved = False
         self._failed_in_ram = False  # a failed step's writes may be in RAM
         self.last_export = None
@@ -482,6 +483,7 @@ class Session:
         todo = [st for st in STEPS if st.key in set(keys)]
         self.selected = {st.key for st in todo}
         self.rerun = []
+        self.tolerated = []
         for st in todo:
             self.results[st.key] = {'status': 'pending', 'detail': ''}
         saved_temp = self.dev.max_temp_c
@@ -529,13 +531,24 @@ class Session:
                             detail, ', '.join(c['name'] for c in warns))
                     self.results[st.key] = {'status': status, 'detail': detail}
                 except Exception as exc:      # noqa: BLE001 -- shown, not hidden
-                    ok = False
-                    if self.autosave and not isinstance(exc, _SaveFailed):
+                    tolerated = (st.key in REFINEMENT_STEPS
+                                 and not isinstance(exc, (_SaveFailed, cogging.CaptureLost)))
+                    ok = False               # the run reports it either way
+                    if tolerated:
+                        # Its own saves were deferred (calibrate.deferred_saves) and are
+                        # dropped; the drive keeps its previous value for what it tunes.
+                        self.tolerated.append(st.key)
+                        self.unsaved = unsaved_before
+                    if (self.autosave and not tolerated
+                            and not isinstance(exc, _SaveFailed)):
                         self._failed_in_ram = True
                         self.unsaved = unsaved_before
                     self.results[st.key] = {'status': 'fail',
                                             'detail': str(exc)}
                     self.log('{}: FAILED: {}'.format(st.title, exc))
+                    if tolerated:
+                        self.log('{}: a refinement -- the drive keeps its previous '
+                                 'value for it; going on'.format(st.title))
                     # Where it failed: a bus error's message alone (an SDO
                     # abort, "Unexpected response") does not say which call.
                     # For a developer (Python logging, DEBUG), not the
@@ -558,7 +571,8 @@ class Session:
                     # rate): run those again, next.
                     todo[i:i] = [s for s in STEPS if s.key in self.rerun]
                     self.rerun = []
-                if not ok:
+                if not ok and not (self.tolerated and self.tolerated[-1] == st.key
+                                   and self.results[st.key]['status'] == 'fail'):
                     for rest in todo[i:]:
                         self.results[rest.key] = {'status': 'skipped',
                                                   'detail': 'after a failure'}
@@ -1045,6 +1059,17 @@ def _p_save(dev):
 #: nothing), so they may run on an uncalibrated current sense: they are how
 #: it gets calibrated.  Every other step needs bias and gain in the
 #: firmware's window first (commission.require_isense).
+#: Refinements: a failure leaves the drive on its previous value for what the step tunes (cogging
+#: restores its table, the Coulomb ff is zeroed, the gains are put back), so the steps after it can
+#: still run on a working drive.  Session.run goes on past one of these and reports it; any other
+#: failure (an identification or calibration step, whose result later steps are built on, or a CAN
+#: fault) still stops the run.  On a stick-slip gearbox (P4-32 BO3518, fw 5.0.6) a friction step
+#: whose drag slipped stopped two of three full runs before any loop was refined.
+#: Not the board steps (settling, isense: every later current reading rests on them) nor
+#: linearity (a gross failure is a bad encoder or pole count, which the winding builds on).
+REFINEMENT_STEPS = frozenset(('latency', 'filter_select', 'friction', 'cogging', 'observer',
+                              'velocity_refine', 'position_refine', 'settle_ki', 'i_cont'))
+
 OPEN_LOOP_STEPS = frozenset(('encoder', 'bias', 'probe', 'gain', 'save',
                              'export'))
 #: Steps that put no current in the winding: they do not wait to cool.
