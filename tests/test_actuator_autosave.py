@@ -313,6 +313,20 @@ class TestARefinementFailure(AutosaveCase):
         self.assertEqual(s.tolerated, ['friction'])
         self.assertEqual(self.events, ['save', 'save'])   # a's and position_refine's
 
+    def test_every_step_after_it_runs(self):
+        # Rerun 1 (2026-11-13): velocity_refine failed, position_refine ran, settle_ki was skipped.
+        s = self.session(('velocity_refine', fails_after_writing), ('position_refine', writes),
+                         ('settle_ki', writes), ('i_cont', writes))
+        self.assertFalse(s.run(['velocity_refine', 'position_refine', 'settle_ki', 'i_cont']))
+        for k in ('position_refine', 'settle_ki', 'i_cont'):
+            self.assertEqual(s.results[k]['status'], 'pass', k)
+
+    def test_a_core_failure_after_a_tolerated_one_still_stops(self):
+        s = self.session(('friction', fails_after_writing), ('winding', fails_after_writing),
+                         ('settle_ki', writes))
+        self.assertFalse(s.run(['friction', 'winding', 'settle_ki']))
+        self.assertEqual(s.results['settle_ki']['status'], 'skipped')
+
     def test_a_save_failure_still_stops(self):
         def save_fails(s):
             s.unsaved = True

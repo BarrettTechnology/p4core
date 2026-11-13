@@ -492,6 +492,7 @@ class Session:
         self._discard_failed()
         self._quiet_bus()
         ok = True
+        stop = False
         i = 0
         try:
             while i < len(todo):
@@ -534,6 +535,7 @@ class Session:
                     tolerated = (st.key in REFINEMENT_STEPS
                                  and not isinstance(exc, (_SaveFailed, cogging.CaptureLost)))
                     ok = False               # the run reports it either way
+                    stop = not tolerated     # ...but only a hard failure ends it
                     if tolerated:
                         # Its own saves were deferred (calibrate.deferred_saves) and are
                         # dropped; the drive keeps its previous value for what it tunes.
@@ -571,8 +573,7 @@ class Session:
                     # rate): run those again, next.
                     todo[i:i] = [s for s in STEPS if s.key in self.rerun]
                     self.rerun = []
-                if not ok and not (self.tolerated and self.tolerated[-1] == st.key
-                                   and self.results[st.key]['status'] == 'fail'):
+                if stop:
                     for rest in todo[i:]:
                         self.results[rest.key] = {'status': 'skipped',
                                                   'detail': 'after a failure'}
