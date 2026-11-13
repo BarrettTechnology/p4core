@@ -540,7 +540,7 @@ def add_common_commands(sub, only=None):
             'and save it', needs_node=True)
     if p:
         p.add_argument('--set', type=_serial_number, metavar='S',
-                       help='write S (decimal or 0x hex; not 0 or 0xFFFFFFFF), '
+                       help='write S (decimal or 0x hex, 0 to 4294967294; not 0xFFFFFFFF), '
                        'read it back and save it (communication range)')
 
     p = add('calibrate', _cmd_calibrate,

@@ -129,13 +129,14 @@ def format_info(result):
 # Serial number, 0x1018,4
 # ---------------------------------------------------------------------------
 SERIAL_KEY = 0xA5A5A5A5
-#: An unprogrammed serial: 0xFFFFFFFF (erased NV, newer firmware) or 0.
-SERIAL_UNSET = (0, 0xFFFFFFFF)
+#: An unprogrammed serial: 0xFFFFFFFF, the erased NV word (4.3.x, 5.0.6+).
+#: 0 is a serial like any other (5.0.0-5.0.5 also read 0 when unset).
+SERIAL_UNSET = 0xFFFFFFFF
 
 
 def serial_set(value):
-    """True for a programmed serial (not None, 0 or 0xFFFFFFFF)."""
-    return value is not None and value not in SERIAL_UNSET
+    """True for a programmed serial (not None or 0xFFFFFFFF)."""
+    return value is not None and value != SERIAL_UNSET
 
 
 def serial_text(value):
@@ -155,7 +156,7 @@ def serial(session, node_id, value=None, reporter=None):
     A write on firmware with the serial key (firmware.serial_key) writes the
     key 0xA5A5A5A5 first, which unlocks one serial write.  The save is the
     communication range (nvsave.save_comm: Save.All on firmware without the
-    ranges).  0 and 0xFFFFFFFF read as 'not set' and are refused.  Returns
+    ranges).  0xFFFFFFFF reads as 'not set' and is refused; 0 is allowed.  Returns
     {'node_id', 'serial', 'serial_set', 'written'}."""
     reporter = _reporter(reporter)
     node = session.add_node(node_id)
@@ -163,9 +164,9 @@ def serial(session, node_id, value=None, reporter=None):
         current = _read_serial(node)
         return dict(node_id=node_id, serial=current,
                     serial_set=serial_set(current), written=False)
-    if not 0 < value < 0xFFFFFFFF:
-        raise OperationError('serial must be 1..4294967294 (0 and 0xFFFFFFFF '
-                             'mean not set), not {}'.format(value))
+    if not 0 <= value < SERIAL_UNSET:
+        raise OperationError('serial must be 0..4294967294 (0xFFFFFFFF '
+                             'means not set), not {}'.format(value))
     data = value.to_bytes(4, 'little')
     keyed = firmware.serial_key(node)
     reporter.status('Writing serial {} to node {}...'.format(value, node_id))

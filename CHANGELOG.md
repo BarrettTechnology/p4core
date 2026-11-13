@@ -10,6 +10,7 @@ app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 ### Changed
 - NV writes go through NMT PRE-OPERATIONAL when the firmware asks for it. 5.0.7+ refuses 0x1010, 0x1011, 0x21B0 and 0x3005,2 writes outside PRE-OP with 0x08000022. On that abort with the outputs off, `nvsave.in_pre_op()` sends the node to PRE-OP, writes again, waits for the commit and starts it again. The saves, the 0x1011 restore in `wipe-nvm`, `set-id`'s NetCfg and a CSV's node-ID row all use it. A node already in PRE-OP, and older firmware, see no NMT traffic.
 - The EDS is firmware 5.0.7's.
+- `serial --set 0` is allowed: 0 is a serial like any other. Only 0xFFFFFFFF (the erased word, what 4.3.x and 5.0.6+ read when no serial is programmed) shows as "not set" and is refused.
 
 ## [0.1.1] - 2026-11-12
 

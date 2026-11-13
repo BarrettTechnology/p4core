@@ -608,7 +608,7 @@ class TestSerial(unittest.TestCase):
 
     def test_unset_serials_read_not_set(self):
         self.assertEqual([ops.serial_text(v) for v in (0, 0xFFFFFFFF, None, 1234)],
-                         ['not set', 'not set', 'unknown', '1234'])
+                         ['0', 'not set', 'unknown', '1234'])
         lines = ops.format_info(dict(node_id=5, firmware='5.0.5', product_code=1,
                                      model='P4-42', serial=0xFFFFFFFF, pwm_hz=None,
                                      bus_voltage_v=None, temperature_c=None))
@@ -646,8 +646,15 @@ class TestSerial(unittest.TestCase):
             node.values[(0x100A, 0)] = text
             self.assertEqual(firmware.serial_key(node), keyed, text)
 
+    def test_zero_is_a_serial(self):
+        node = self.puck()
+        r = ops.serial(FakeSession([node]), 5, 0)
+        self.assertEqual((r['serial'], r['serial_set'], r['written']), (0, True, True))
+        self.assertEqual([v for k, v in node.writes if k == (0x1018, 4)],
+                         [ops.SERIAL_KEY, 0])
+
     def test_unset_values_are_refused(self):
-        for bad in (0, 0xFFFFFFFF, -1, 1 << 32):
+        for bad in (0xFFFFFFFF, -1, 1 << 32):
             node = self.puck()
             with self.assertRaises(ops.OperationError):
                 ops.serial(FakeSession([node]), 5, bad)
