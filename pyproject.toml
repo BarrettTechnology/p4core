@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p4core"
-version = "0.1.1"
+version = "0.1.2"
 description = "Shared CANopen, flashing, configuration and calibration layer for the P4 puck tools"
 requires-python = ">=3.9"
 dependencies = [

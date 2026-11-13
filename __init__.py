@@ -18,4 +18,4 @@ or pull in canopen.  Nothing in p4core imports wx: the wx Reporter and the
 splash live in the apps.
 """
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'

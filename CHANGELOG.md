@@ -3,9 +3,9 @@
 All notable changes to p4core are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). p4core ships as a
 wheel next to the apps that need it (the A/B test package carries both); an
-app pins the version that has what it uses (puckutility 1.4.2: `>=0.1.1`).
+app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 
-## [Unreleased]
+## [0.1.2] - 2026-11-13
 
 ### Changed
 - NV writes go through NMT PRE-OPERATIONAL when the firmware asks for it. 5.0.7+ refuses 0x1010, 0x1011, 0x21B0 and 0x3005,2 writes outside PRE-OP with 0x08000022. On that abort with the outputs off, `nvsave.in_pre_op()` sends the node to PRE-OP, writes again, waits for the commit and starts it again. The saves, the 0x1011 restore in `wipe-nvm`, `set-id`'s NetCfg and a CSV's node-ID row all use it. A node already in PRE-OP, and older firmware, see no NMT traffic.
