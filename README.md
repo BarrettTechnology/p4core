@@ -49,6 +49,13 @@ A PDO COB-ID change goes through invalid (0x80000000 | new, then new): 5.x
 refuses a new identifier on a valid PDO, as CiA 301 says.  Changes are in
 `CHANGELOG.md`.
 
+Every NV write goes through `nvsave` (saves) or `nvsave.in_pre_op()`
+(0x1011 restore, the node ID).  Firmware 5.0.7 takes NV writes only in NMT
+PRE-OPERATIONAL, so a save to an OPERATIONAL node is: NMT PRE-OP, write
+0x1010, read 0x1010 until bit 2 (save pending) clears, NMT START.  A node
+already in PRE-OP gets no NMT command; a save with the drive enabled is
+refused (`nvsave.SaveRefused`).
+
 ## Layout
 
 The repository root is the package (as in p4sysid): add it to an app as a

@@ -25,12 +25,19 @@ without the bit costs one more round-trip and a FALLBACK_WAIT_S wait, which
 covers a ranged commit there; a reboot or a power cut right after a save then
 no longer loses it.
 
-From 5.0.6 the firmware takes NV writes (0x1010, 0x1011, 0x21B0, 0x3005,2)
+From 5.0.7 the firmware takes NV writes (0x1010, 0x1011, 0x21B0, 0x3005,2)
 only in NMT PRE-OPERATIONAL: the STM32 page erase drops SYNCs for ~22 ms.  A
 write refused with 0x08000022 while the outputs are off came from a node in
 OPERATIONAL (a STOPPED node does not answer SDO), so in_pre_op() sends it to
 PRE-OP, writes again, waits for the commit and starts it again.  A node
 already in PRE-OP, and older firmware, take the first write as before.
+
+The save procedure on 5.0.7, which _save() follows:
+  1. write 0x1010,<sub>; on 0x08000022 with the outputs off, NMT
+     PRE-OPERATIONAL (0x80) and write it again
+  2. read 0x1010,<sub> until bit 2 (save pending) clears; 5.0.7 answers
+     these reads during the commit
+  3. NMT START (0x01) if step 1 left OPERATIONAL
 """
 
 import time
@@ -91,7 +98,7 @@ def _outputs_on(node):
 def in_pre_op(node, action, restore=True):
     """Run *action()*, an NV write; return what it returns.
 
-    Firmware 5.0.6+ refuses NV writes outside NMT PRE-OPERATIONAL with
+    Firmware 5.0.7+ refuses NV writes outside NMT PRE-OPERATIONAL with
     0x08000022, as it does while the outputs are on.  On that abort with the
     outputs off, send *node* to PRE-OP, run *action()* again and, with
     *restore*, start the node again afterwards (it was OPERATIONAL: it

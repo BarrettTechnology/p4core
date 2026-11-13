@@ -18,7 +18,7 @@ class Sdo:
         self.pending_bit = pending_bit      # firmware shows 0x1010 bit 2
         self.pending_reads = pending_reads  # reads that still show it per save
         self.enabled = enabled              # outputs on: saves refused
-        self.operational = operational      # NMT OPERATIONAL: 5.0.6+ refuses saves
+        self.operational = operational      # NMT OPERATIONAL: 5.0.7+ refuses saves
         self.log = []                       # ('nmt', cmd) / ('save', sub) / ('poll', sub)
         self.pending = 0
         self.saves = []
@@ -228,7 +228,7 @@ class Refused(unittest.TestCase):
 
 
 class PreOp(unittest.TestCase):
-    """5.0.6+: NV writes in NMT PRE-OPERATIONAL only."""
+    """5.0.7+: NV writes in NMT PRE-OPERATIONAL only."""
 
     def test_an_operational_node_is_saved_in_pre_op_and_started_again(self):
         n = node(True, operational=True)

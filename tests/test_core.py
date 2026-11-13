@@ -555,7 +555,7 @@ class TestOps(unittest.TestCase):
         self.assertTrue(ops.set_id(session, 5, 9, quick(RecordingReporter())))
         self.assertEqual(session.nodes[9].values[(0x1803, 1)], 0x489)
 
-    def test_set_id_of_an_operational_506_puck_goes_through_pre_op(self):
+    def test_set_id_of_an_operational_507_puck_goes_through_pre_op(self):
         node = pre_op_only(self.puck(5))
         session = FakeSession([node])
         self.assertTrue(ops.set_id(session, 5, 9, quick(RecordingReporter())))

@@ -127,7 +127,7 @@ NV_WRITE_KEYS = ([(0x1010, s) for s in range(1, 6)] + [(0x1011, s) for s in rang
 
 
 def pre_op_only(node, state='OPERATIONAL'):
-    """5.0.6+: NV writes refused (0x08000022) outside NMT PRE-OPERATIONAL."""
+    """5.0.7+: NV writes refused (0x08000022) outside NMT PRE-OPERATIONAL."""
     node.nmt_state = state
 
     def check(was, now):
