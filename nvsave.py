@@ -24,6 +24,13 @@ motor outputs off; newer builds show the queued write as bit 2 of every
 without the bit costs one more round-trip and a FALLBACK_WAIT_S wait, which
 covers a ranged commit there; a reboot or a power cut right after a save then
 no longer loses it.
+
+From 5.0.6 the firmware takes NV writes (0x1010, 0x1011, 0x21B0, 0x3005,2)
+only in NMT PRE-OPERATIONAL: the STM32 page erase drops SYNCs for ~22 ms.  A
+write refused with 0x08000022 while the outputs are off came from a node in
+OPERATIONAL (a STOPPED node does not answer SDO), so in_pre_op() sends it to
+PRE-OP, writes again, waits for the commit and starts it again.  A node
+already in PRE-OP, and older firmware, take the first write as before.
 """
 
 import time
@@ -63,6 +70,46 @@ class SaveRefused(SdoAbortedError if SdoAbortedError is not Exception
                                                  ABORT_DEVICE_STATE))
 
 
+STATUSWORD = (0x6041, 0)
+OPERATION_ENABLED = 0x4
+NMT_START, NMT_PRE_OP = 0x01, 0x80
+
+
+def _refused(exc):
+    return getattr(exc, 'code', None) == ABORT_DEVICE_STATE
+
+
+def _outputs_on(node):
+    """Statusword "operation enabled"; False when it cannot be read."""
+    try:
+        sw = int.from_bytes(bytes(node.sdo.upload(*STATUSWORD))[:2], 'little')
+    except Exception:
+        return False
+    return bool(sw & OPERATION_ENABLED)
+
+
+def in_pre_op(node, action, restore=True):
+    """Run *action()*, an NV write; return what it returns.
+
+    Firmware 5.0.6+ refuses NV writes outside NMT PRE-OPERATIONAL with
+    0x08000022, as it does while the outputs are on.  On that abort with the
+    outputs off, send *node* to PRE-OP, run *action()* again and, with
+    *restore*, start the node again afterwards (it was OPERATIONAL: it
+    answered the SDO and refused).  Leave *restore* off when a reset follows.
+    Any other abort, or the refusal with the outputs on, is raised."""
+    try:
+        return action()
+    except SdoAbortedError as exc:
+        if not _refused(exc) or _outputs_on(node):
+            raise
+    node.nmt.send_command(NMT_PRE_OP)
+    try:
+        return action()
+    finally:
+        if restore:
+            node.nmt.send_command(NMT_START)
+
+
 class SaveTimeout(SdoCommunicationError if SdoCommunicationError is not Exception
                   else RuntimeError):
     """0x1010,<sub> still showed the save pending at the deadline."""
@@ -74,13 +121,16 @@ def _save(node, sub, value=SAVE_SIGNATURE):
     try:
         if old is not None and old < TIMEOUT_S:
             sdo.RESPONSE_TIMEOUT = TIMEOUT_S
-        try:
+        def save():
             sdo.download(0x1010, sub, value.to_bytes(4, 'little'))
+            wait_committed(node, sub)   # before in_pre_op() starts the node
+
+        try:
+            in_pre_op(node, save)
         except SdoAbortedError as exc:
-            if getattr(exc, 'code', None) == ABORT_DEVICE_STATE:
+            if _refused(exc):
                 raise SaveRefused(getattr(node, 'id', '?'), sub) from exc
             raise
-        wait_committed(node, sub)
     finally:
         if old is not None:
             sdo.RESPONSE_TIMEOUT = old

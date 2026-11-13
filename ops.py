@@ -323,10 +323,13 @@ WipeResult = collections.namedtuple('WipeResult', 'backup template loaded ok')
 
 
 def _nv_command(node, index, sub, signature):
+    """0x1011 restore: PRE-OP only on 5.0.6+ (nvsave.in_pre_op), and a reboot
+    follows, so the node is not started again."""
     timeout = node.sdo.RESPONSE_TIMEOUT
     node.sdo.RESPONSE_TIMEOUT = max(timeout, 1.0)
     try:
-        node.sdo.download(index, sub, signature.to_bytes(4, 'little'))
+        nvsave.in_pre_op(node, lambda: node.sdo.download(
+            index, sub, signature.to_bytes(4, 'little')), restore=False)
     finally:
         node.sdo.RESPONSE_TIMEOUT = timeout
 
@@ -505,7 +508,9 @@ def set_id(session, old_id, new_id, reporter=None, pdo_ids='follow'):
         session.set_sync_rate(0)
     node = session.add_node(old_id)
     reporter.status('Setting node ID {} -> {}...'.format(old_id, new_id))
-    node.sdo['NetCfg'].raw = new_id
+    # An NV write: PRE-OP only on 5.0.6+; the reset below ends the state anyway
+    nvsave.in_pre_op(node, lambda: setattr(node.sdo['NetCfg'], 'raw', new_id),
+                     restore=False)
     session.send_nmt(0x81, old_id)
     _forget_quietly(session, old_id)
     if was_selected:

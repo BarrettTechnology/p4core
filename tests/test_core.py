@@ -10,7 +10,7 @@ from unittest import mock
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
 
 import fake  # noqa: F401
-from fake import FakeNode, cia_cob_ids
+from fake import FakeNode, cia_cob_ids, pre_op_only
 
 from p4core import app_settings, calibrate, cli, ezero, flash, ops, paths
 from p4core.reporter import Aborted, ConsoleReporter, RecordingReporter, Reporter
@@ -554,6 +554,13 @@ class TestOps(unittest.TestCase):
         session = FakeSession([cia_cob_ids(self.puck(5))])
         self.assertTrue(ops.set_id(session, 5, 9, quick(RecordingReporter())))
         self.assertEqual(session.nodes[9].values[(0x1803, 1)], 0x489)
+
+    def test_set_id_of_an_operational_506_puck_goes_through_pre_op(self):
+        node = pre_op_only(self.puck(5))
+        session = FakeSession([node])
+        self.assertTrue(ops.set_id(session, 5, 9, quick(RecordingReporter())))
+        self.assertEqual(node.nmt_commands[0], 0x80)
+        self.assertIn(((0x21B0, 0), 9), node.writes)
 
     def test_unknown_pdo_mode(self):
         session = FakeSession([self.puck(5)])

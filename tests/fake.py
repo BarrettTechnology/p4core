@@ -111,6 +111,32 @@ class FakeSdo:
         self.write((index, sub), value)
 
 
+class _FakeNmt:
+    STATES = {0x01: 'OPERATIONAL', 0x80: 'PRE-OPERATIONAL', 0x02: 'STOPPED'}
+
+    def __init__(self, node):
+        self.node = node
+
+    def send_command(self, cmd):
+        self.node.nmt_commands.append(cmd)
+        self.node.nmt_state = self.STATES.get(cmd, self.node.nmt_state)
+
+
+NV_WRITE_KEYS = ([(0x1010, s) for s in range(1, 6)] + [(0x1011, s) for s in range(1, 6)]
+                 + [(0x21B0, 0), (0x3005, 2)])
+
+
+def pre_op_only(node, state='OPERATIONAL'):
+    """5.0.6+: NV writes refused (0x08000022) outside NMT PRE-OPERATIONAL."""
+    node.nmt_state = state
+
+    def check(was, now):
+        return None if node.nmt_state == 'PRE-OPERATIONAL' else 0x08000022
+    for key in NV_WRITE_KEYS:
+        node.write_checks[key] = check
+    return node
+
+
 class FakeNode:
     def __init__(self, node_id=5, values=None):
         self.id = node_id
@@ -123,6 +149,9 @@ class FakeNode:
         self.reads, self.writes, self.downloads = [], [], []
         self.save_pending = False
         self.sdo = FakeSdo(self)
+        self.nmt_state = 'PRE-OPERATIONAL'
+        self.nmt_commands = []
+        self.nmt = _FakeNmt(self)
 
     def key(self, name, sub=None):
         entry = self.object_dictionary[name]

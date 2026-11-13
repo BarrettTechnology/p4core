@@ -590,7 +590,10 @@ def apply(node, rows, node_id=None, reporter=None):
                 if convert and (index, sub) in LEGACY_X10_ROWS:
                     data, value = _legacy_x10(row, node_id)
                 try:
-                    node.sdo.download(index, sub, data)
+                    if (index, sub) == NODE_ID_OBJECT:   # an NV write: PRE-OP only
+                        nvsave.in_pre_op(node, lambda: node.sdo.download(index, sub, data))
+                    else:
+                        node.sdo.download(index, sub, data)
                     result.written += 1
                     if b2b_s:
                         time.sleep(b2b_s)

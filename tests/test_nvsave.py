@@ -12,11 +12,14 @@ SIG = (0x65766173).to_bytes(4, 'little')
 class Sdo:
     RESPONSE_TIMEOUT = 0.3
 
-    def __init__(self, ranges, pending_bit=True, pending_reads=2, enabled=False):
+    def __init__(self, ranges, pending_bit=True, pending_reads=2, enabled=False,
+                 operational=False):
         self.ranges = ranges
         self.pending_bit = pending_bit      # firmware shows 0x1010 bit 2
         self.pending_reads = pending_reads  # reads that still show it per save
         self.enabled = enabled              # outputs on: saves refused
+        self.operational = operational      # NMT OPERATIONAL: 5.0.6+ refuses saves
+        self.log = []                       # ('nmt', cmd) / ('save', sub) / ('poll', sub)
         self.pending = 0
         self.saves = []
         self.timeouts = []
@@ -28,17 +31,21 @@ class Sdo:
             if sub == 5 and not self.ranges:
                 raise SdoAbortedError(0x06020000)
             self.polls.append(sub)
+            self.log.append(('poll', sub))
             status = 1
             if self.pending_bit and self.pending:
                 self.pending -= 1
                 status |= nvsave.SAVE_PENDING
             return status.to_bytes(4, 'little')
+        if (index, sub) == (0x6041, 0):
+            return (0x0637 if self.enabled else 0x0631).to_bytes(2, 'little')
         return self.od.get((index, sub), (0x205).to_bytes(4, 'little'))
 
     def download(self, index, sub, data):
         if index == 0x1010:
-            if self.enabled:
+            if self.enabled or self.operational:
                 raise SdoAbortedError(0x08000022)
+            self.log.append(('save', sub))
             self.pending = self.pending_reads
             self.saves.append(sub)
             self.timeouts.append(self.RESPONSE_TIMEOUT)
@@ -48,7 +55,14 @@ class Sdo:
 
 
 def node(ranges, **kw):
-    return mock.Mock(sdo=Sdo(ranges, **kw), id=5)
+    n = mock.Mock(sdo=Sdo(ranges, **kw), id=5)
+
+    def nmt(cmd):
+        n.sdo.log.append(('nmt', cmd))
+        n.sdo.operational = cmd == nvsave.NMT_START
+
+    n.nmt.send_command.side_effect = nmt
+    return n
 
 
 def setUpModule():
@@ -211,6 +225,58 @@ class Refused(unittest.TestCase):
     def test_the_cli_prints_the_advice(self):
         from p4core import cli
         self.assertTrue(issubclass(nvsave.SaveRefused, cli.SdoError))
+
+
+class PreOp(unittest.TestCase):
+    """5.0.6+: NV writes in NMT PRE-OPERATIONAL only."""
+
+    def test_an_operational_node_is_saved_in_pre_op_and_started_again(self):
+        n = node(True, operational=True)
+        nvsave.save_comm(n)
+        self.assertEqual(n.sdo.saves, [nvsave.COMM])
+        log = [e for e in n.sdo.log if e[0] != 'poll']
+        self.assertEqual(log, [('nmt', 0x80), ('save', nvsave.COMM), ('nmt', 0x01)])
+        # the commit is waited for before the start
+        start = n.sdo.log.index(('nmt', 0x01))
+        self.assertEqual(n.sdo.log[start - 1], ('poll', nvsave.COMM))
+        self.assertTrue(n.sdo.operational)
+
+    def test_a_node_in_pre_op_gets_no_nmt(self):
+        n = node(True)
+        nvsave.save_settings(n)
+        n.nmt.send_command.assert_not_called()
+
+    def test_enabled_is_refused_without_touching_nmt(self):
+        n = node(True, enabled=True, operational=True)
+        with self.assertRaises(nvsave.SaveRefused):
+            nvsave.save_all(n)
+        n.nmt.send_command.assert_not_called()
+
+    def test_without_restore_the_node_stays_in_pre_op(self):
+        n = node(True, operational=True)
+        nvsave.in_pre_op(n, lambda: n.sdo.download(0x1010, 1, SIG), restore=False)
+        self.assertEqual([e for e in n.sdo.log if e[0] == 'nmt'], [('nmt', 0x80)])
+
+    def test_the_node_is_started_again_when_the_retry_fails(self):
+        n = node(True, operational=True)
+        calls = []
+
+        def action():
+            calls.append(1)
+            raise SdoAbortedError(0x06090030)
+
+        with self.assertRaises(SdoAbortedError):
+            nvsave.in_pre_op(n, lambda: (calls.append(0), n.sdo.download(0x1010, 1, SIG))
+                             if not calls else action())
+        self.assertEqual([e for e in n.sdo.log if e[0] == 'nmt'],
+                         [('nmt', 0x80), ('nmt', 0x01)])
+
+    def test_other_aborts_are_not_retried(self):
+        n = node(True)
+        n.sdo.download = mock.Mock(side_effect=SdoAbortedError(0x06010002))
+        with self.assertRaises(SdoAbortedError):
+            nvsave.in_pre_op(n, lambda: n.sdo.download(0x21B0, 0, b'\x05'))
+        n.nmt.send_command.assert_not_called()
 
 
 class Jobs(unittest.TestCase):
