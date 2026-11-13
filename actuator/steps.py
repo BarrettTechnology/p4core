@@ -43,6 +43,7 @@ from . import cogging, commission, encoder, friction, loops, pipeline, steptest
 from .commission import Limits, SysidError, drive_units, write_od
 from .drivecal import CalError
 from p4core import firmware
+from p4core import calibrate as _calibrate
 from p4core.calibrate import rated_torque_mnm, read_friction, read_kt
 
 
@@ -396,6 +397,28 @@ class Session:
         self.ctx.pop('s', None)
         self._preflight_done = False
 
+    def _step_saves(self, st, pending):
+        """The Save.Single calls a step made while it ran (recorded by
+        calibrate.deferred_saves): sent now that it has passed, with the drive
+        idle -- firmware 5.0.6 refuses a save while the outputs are on -- or,
+        with autosave off, left in RAM for the Save step.  A step that raised
+        never gets here, so NV keeps its previous values."""
+        if not pending:
+            return
+        self.unsaved = True
+        if not self.autosave and st.key != 'save':
+            self.log('{}: {} value(s) left in RAM (not saved)'.format(
+                st.title, len(pending)))
+            return
+        try:
+            self.dev.safe_stop()
+            _calibrate.flush_saves(pending)
+        except Exception as exc:
+            raise _SaveFailed('passed, but saving its {} value(s) failed, so '
+                              'they are only in RAM: {}'.format(len(pending), exc)) from exc
+        self.log('{}: {} value(s) saved (Save.Single, drive idle)'.format(
+            st.title, len(pending)))
+
     def _autosave(self, st):
         """One Save.App + Save.Mfg after a step that passed, if it left values in RAM.
         Save and Export are not results to save."""
@@ -494,7 +517,9 @@ class Session:
                         commission.wait_until_cool(self.dev, self.limits,
                                                    self.log)
                         cool_s = time.monotonic() - t_start
-                    detail = st.run(self) or ''
+                    with _calibrate.deferred_saves() as pending:
+                        detail = st.run(self) or ''
+                    self._step_saves(st, pending)
                     self._autosave(st)
                     warns = [c for c in self.rep.checks[n_checks:]
                              if c['severity'] == 'warn']
@@ -559,7 +584,9 @@ def _encoder_filter(s):
     and, on firmware that writes it only at boot (or a chip it never writes
     at runtime, encfilter.apply), the drive rebooted.  Returns (plan,
     note)."""
-    from p4core.calibrate import save_single
+    # At once, not deferred: the reboot below must find the filter in NV.
+    # The encoder step runs at rest (bridge off), which 5.0.6 allows.
+    from p4core.calibrate import save_single_now as save_single
     from . import encfilter
     p = encfilter.plan(s.dev.node)
     if p['target'] is None:

@@ -218,3 +218,82 @@ class TestI2t(AutosaveCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SaveNode:
+    """A node whose Save.Single records what reached NV."""
+    id = 5
+
+    def __init__(self, events):
+        events_ = events
+
+        class _Var:
+            @property
+            def raw(self):
+                return 0
+
+            @raw.setter
+            def raw(self, value):
+                events_.append(('single', value >> 8, value & 0xFF))
+        self.sdo = {'Save': {'Single': _Var()}}
+
+
+class TestInStepSaves(AutosaveCase):
+    """Save.Single inside a step is deferred to after it passed (5.0.6 refuses
+    a save with the outputs on; a failed step must leave NV as it was)."""
+
+    def node_session(self, *pairs, **kw):
+        s = self.session(*pairs, **kw)
+        s.dev.node = SaveNode(self.events)
+        stops = []
+        s.dev.safe_stop = lambda: (stops.append(len(self.events)),
+                                   self.events.append('idle'))
+        return s
+
+    @staticmethod
+    def saves_mid_step(seen):
+        def run(s):
+            from p4core.calibrate import save_single
+            from p4core.actuator import drivecal
+            save_single(s.dev.node, 0x3008, 3)
+            drivecal.save_single(s.dev.node, 0x3009, 3)
+            save_single(s.dev.node, 0x3008, 3)          # duplicate dropped
+            seen.append('ran')
+            return 'ok'
+        return run
+
+    def test_sent_after_the_step_with_the_drive_idle(self):
+        seen = []
+        s = self.node_session(('bias', self.saves_mid_step(seen)))
+        self.assertTrue(s.run(['bias']))
+        self.assertEqual(self.events, ['idle', ('single', 0x3008, 3),
+                                       ('single', 0x3009, 3), 'save'])
+
+    def test_nothing_reaches_nv_when_the_step_fails(self):
+        def fails(s):
+            from p4core.calibrate import save_single
+            save_single(s.dev.node, 0x3008, 7)          # a cleared slope...
+            raise steps.StepFailed('...then the measurement failed')
+        s = self.node_session(('slope', fails))
+        self.assertFalse(s.run(['slope']))
+        self.assertNotIn(('single', 0x3008, 7), self.events)
+
+    def test_no_save_leaves_them_in_ram(self):
+        s = self.node_session(('bias', self.saves_mid_step([])), autosave=False)
+        self.assertTrue(s.run(['bias']))
+        self.assertEqual([e for e in self.events if e != 'idle'], [])
+        self.assertTrue(s.unsaved)
+
+    def test_outside_a_session_it_saves_at_once(self):
+        from p4core.calibrate import save_single
+        node = SaveNode(self.events)
+        save_single(node, 0x3011, 1)
+        self.assertEqual(self.events, [('single', 0x3011, 1)])
+
+    def test_save_single_now_is_never_deferred(self):
+        from p4core import calibrate
+        node = SaveNode(self.events)
+        with calibrate.deferred_saves() as pending:
+            calibrate.save_single_now(node, 0x2100, 2)
+        self.assertEqual(pending, [])
+        self.assertEqual(self.events, [('single', 0x2100, 2)])

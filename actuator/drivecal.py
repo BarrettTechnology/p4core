@@ -6,6 +6,7 @@ not on a P4Drive: they are older than the sequencer and talk SDO directly.
 These are the pieces more than one of them needs.
 """
 
+from p4core import calibrate as _calibrate
 from p4core.calibrate import firmware_version, read_bus_v
 from p4core.can_backend import sdo_contention_message
 from p4core.cia402 import MODE_IDLE
@@ -27,7 +28,8 @@ def fw_at_least(node, major, minor, patch):
 
 
 def save_single(node, index, sub):
-    node.sdo['Save']['Single'].raw = (index << 8) | sub
+    """p4core.calibrate.save_single: deferred inside a Session step (deferred_saves)."""
+    _calibrate.save_single(node, index, sub)
 
 
 def clear_offset_reg(node):

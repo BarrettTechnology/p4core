@@ -17,8 +17,10 @@ BIAS_MENU / BIAS_MENU_QUICK, GAIN_MENU and EZERO_QUICK_STEPS (keyword
 arguments to the step functions), after clear_slope().
 """
 
+import contextlib
 import math
 import struct
+import threading
 import time
 
 from canopen.sdo.exceptions import SdoAbortedError, SdoCommunicationError
@@ -102,8 +104,54 @@ class CalibrationDeclined(CalibrationError):
     """The user answered no to continuing past an out-of-bounds result."""
 
 
+_deferred = threading.local()
+
+
+@contextlib.contextmanager
+def deferred_saves():
+    """Record save_single() calls instead of sending them, for the duration.
+
+    Yields the list of (node, index, sub) recorded, in call order, duplicates
+    dropped.  A calibration step saves its results as it measures them, often
+    with the bridge still on; firmware 5.0.6 refuses every NV save while the
+    motor outputs are on (abort 0x08000022), and an aborted step would leave
+    NV half-written (a slope or fold cleared before its new value was
+    measured).  The actuator Session runs each step inside this and sends the
+    list (flush_saves) only after the step passed, with the drive idle, and
+    only when it saves at all.  Nested use shares the outer list."""
+    outer = getattr(_deferred, 'pending', None)
+    if outer is not None:
+        yield outer
+        return
+    pending = []
+    _deferred.pending = pending
+    try:
+        yield pending
+    finally:
+        _deferred.pending = None
+
+
 def save_single(node, index, sub):
+    """Save.Single one object, or record it inside deferred_saves()."""
+    pending = getattr(_deferred, 'pending', None)
+    if pending is not None:
+        if not any(n is node and i == index and s == sub
+                   for n, i, s in pending):
+            pending.append((node, index, sub))
+        return
+    save_single_now(node, index, sub)
+
+
+def save_single_now(node, index, sub):
+    """Save.Single at once, even inside deferred_saves(): for a value that a
+    reboot later in the same step must find in NV (the encoder filter)."""
     node.sdo['Save']['Single'].raw = (index << 8) | sub
+
+
+def flush_saves(pending):
+    """Send what deferred_saves() recorded, in order."""
+    for node, index, sub in pending:
+        save_single_now(node, index, sub)
 
 
 def firmware_version(node):
