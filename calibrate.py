@@ -628,6 +628,11 @@ def calibrate_ezero(node, reporter=None, steps=16):
     r['previous_polarity'] = sdo['Calibration']['e_polarity'].raw
     sdo['Calibration']['e_polarity'].raw = r['e_polarity']
     sdo['Calibration']['e_zero'].raw = r['e_zero']
+    # The sweep leaves the drive Operation Enabled in IDLE, and firmware 5.0.6+
+    # refuses an NV save while the outputs are on (0x08000022; nvgate cannot
+    # retry that one). Shut down first, as the other steps do; the next step
+    # enables again.
+    deenergise(node, settle_s=0.2, sleep=reporter.sleep)
     save_single(node, 0x3011, 2)    # e_polarity
     save_single(node, 0x3011, 1)    # e_zero
     r['previous'] = previous
