@@ -240,6 +240,10 @@ class P4Network(canopen.Network):
 
 
 from .nvsave import SAVE_SIGNATURE  # noqa: E402,F401  (re-exported)
+from . import nvgate  # noqa: E402
+
+# 5.0.7 saves only in NMT PRE-OP: every 0x1010/0x1011 write goes through nvgate.
+nvgate.install()
 
 
 class Session:

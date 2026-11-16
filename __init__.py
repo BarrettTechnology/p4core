@@ -5,6 +5,7 @@
   flash        firmware over CAN through the flashloader
   config_csv   configuration CSVs: validate, load, build from a template
   calibrate    current-sense bias/gain and encoder-zero calibration
+  nvgate       NV saves on 5.0.7+ (PRE-OP only): wraps every 0x1010/0x1011 write
   ezero        the encoder-zero sweep
   ops          the shared operations, UI-free (the apps' controllers call these)
   reporter     how an operation reports progress and asks questions
