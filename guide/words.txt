@@ -1,0 +1,26 @@
+# Words the spelling check accepts (Barrett / CANopen / motor-control terms), one per line.
+# A guide can add its own in docs/guide/words.txt.
+CANopen
+csv
+CSV
+ebin
+ini
+Config
+Init
+Ctrl
+LEDs
+gearhead
+runout
+cogging
+datasheet
+datasheet's
+thermistor
+mNm
+Kp
+Ki
+Icont
+Iq
+PWM
+Identify's
+Dev
+PCAN
