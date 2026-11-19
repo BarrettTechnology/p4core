@@ -987,8 +987,15 @@ def _r_cogging(s):
         # table did not lower, leaves the table the drive had (calibrate
         # restores it) and the calibration goes on -- a warning, not a
         # failure that would fail the whole run.
+        try:
+            had = cogging.read_table(s.dev)
+        except Exception:        # noqa: BLE001 -- the report only
+            had = None
+        kept = ('the drive has NO cogging table (low-speed ripple and small '
+                'steps go without it)' if had is not None and not had.get('bins')
+                else 'the table is as it was')
         s.rep.check('cogging', False, 'not applied: {}'.format(exc))
-        return 'not applied, the table is as it was: {}'.format(exc)
+        return 'not applied, {}: {}'.format(kept, exc)
     s.unsaved = True
     s.ctx['cogging'] = r
     if not r.get('passed'):

@@ -421,8 +421,7 @@ def _stick_slip_hint(dev):
         ffs = ('the Coulomb ff (0x2381,3) is off (Friction calibration '
                'leaves it off when it does not help)')
     return ('the velocity loop ({}) is too soft for this load at low speed '
-            '({}); raise its Ki, or leave cogging out -- the actuator works '
-            'without it'.format(loop, ffs))
+            '({})'.format(loop, ffs))
 
 
 def speed_spread(fr, n=STICK_SLIP_BIN):
@@ -697,12 +696,51 @@ def _encoder_ks(dev):
     return [k for k in ks if k]
 
 
-def calibrate(dev, pole_pairs, log=None, fit_rpms=FIT_RPMS,
-              verify_rpms=VERIFY_RPMS, revs=REVS):
+#: Velocity loop held stiffer, for the captures only, when the configured loop
+#: stick-slips at the fit speed: about twice the bandwidth (Kp x2, Ki x3.5).
+#: Node 15, P4-32 BO3518 61:1, v1.2.6 gains (Kp 0.0195, Ki 0.00079): -30 rpm
+#: was 30 +- 30 rpm; at Kp 0.039 / Ki 0.00274 the capture held and the table
+#: took 30 rpm ripple 25.7 -> 5.4 rpm (QTM 10 rpm 74-80 % -> 31-37 %).
+STIFF_KP_X = 2.0
+STIFF_KI_X = 3.5
+
+
+def calibrate(dev, pole_pairs, log=None, **kw):
     """Fit, lead, fade and verify the cogging table; leaves it in RAM, on.
     Returns the record for the report; 'passed' False leaves the table the
-    drive had before."""
+    drive had before.
+
+    The table matters most where the load sticks (a gearhead at low speed),
+    and that is where the configured velocity loop may not hold the fit
+    speed.  On stick-slip the captures run again with the loop held stiffer
+    (STIFF_KP_X, STIFF_KI_X) in RAM; the configured gains are written back
+    before this returns, whatever happens, so nothing stiffer is saved.  The
+    table is a torque against angle and does not depend on the gains."""
     log = log or (lambda *a: None)
+    try:
+        return _calibrate(dev, pole_pairs, log, **kw)
+    except StickSlip as exc:
+        kp = float(steptest.read(dev, 'vel_kp'))
+        ki = float(steptest.read(dev, 'vel_ki'))
+        log('cogging: {}'.format(exc))
+        log('cogging: capturing again with the velocity loop held stiffer for '
+            'the captures (Kp {:.4g} -> {:.4g}, Ki {:.4g} -> {:.4g}); the '
+            'configured gains are restored after'.format(
+                kp, kp * STIFF_KP_X, ki, ki * STIFF_KI_X))
+        try:
+            steptest.write(dev, 'vel_kp', kp * STIFF_KP_X)
+            steptest.write(dev, 'vel_ki', ki * STIFF_KI_X)
+            rec = _calibrate(dev, pole_pairs, log, **kw)
+        finally:
+            steptest.write(dev, 'vel_kp', kp)
+            steptest.write(dev, 'vel_ki', ki)
+        rec['stiff_loop'] = dict(kp=kp * STIFF_KP_X, ki=ki * STIFF_KI_X)
+        return rec
+
+
+def _calibrate(dev, pole_pairs, log, fit_rpms=FIT_RPMS,
+               verify_rpms=VERIFY_RPMS, revs=REVS):
+    """calibrate(), at the velocity gains the drive has now."""
     n_bins, has_lead, has_fade = layout(dev)
     if not n_bins:
         raise SysidError('this firmware has no cogging feed-forward (0x302E)')

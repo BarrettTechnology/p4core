@@ -389,7 +389,53 @@ class TestStickSlipHint(unittest.TestCase):
             h = self.hint(ff)
             self.assertNotIn('run Friction calibration', h)
             self.assertIn('Ki 3.2e-06', h)
-            self.assertIn('leave cogging out', h)
+            self.assertNotIn('leave cogging out', h)
+
+
+class TestStiffRetry(unittest.TestCase):
+    """calibrate(): stick-slip at the configured gains -> the captures again
+    with the loop held stiffer, and the configured gains always back."""
+
+    def run_cal(self, outcomes):
+        regs = {'vel_kp': 0.0195, 'vel_ki': 0.00079}
+        seen = []
+
+        def fake(dev, pp, log, **kw):
+            seen.append((regs['vel_kp'], regs['vel_ki']))
+            o = outcomes.pop(0)
+            if isinstance(o, BaseException):
+                raise o
+            return dict(o)
+
+        with mock.patch.object(cogging, '_calibrate', side_effect=fake), \
+                mock.patch.object(cogging.steptest, 'read', lambda d, k: regs[k]), \
+                mock.patch.object(cogging.steptest, 'write',
+                                  lambda d, k, v: regs.__setitem__(k, v)):
+            try:
+                rec = cogging.calibrate(object(), 7)
+            except cogging.SysidError as exc:
+                rec = exc
+        return rec, seen, regs
+
+    def test_no_stick_slip_runs_once_at_the_configured_gains(self):
+        rec, seen, regs = self.run_cal([{'passed': True}])
+        self.assertEqual(seen, [(0.0195, 0.00079)])
+        self.assertNotIn('stiff_loop', rec)
+
+    def test_stick_slip_retries_stiffer_and_restores(self):
+        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
+                                        {'passed': True}])
+        self.assertEqual(len(seen), 2)
+        self.assertAlmostEqual(seen[1][0], 0.0195 * cogging.STIFF_KP_X)
+        self.assertAlmostEqual(seen[1][1], 0.00079 * cogging.STIFF_KI_X)
+        self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
+        self.assertIn('stiff_loop', rec)
+
+    def test_gains_restored_when_the_stiff_retry_fails_too(self):
+        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
+                                        cogging.StickSlip('still not steady')])
+        self.assertIsInstance(rec, cogging.StickSlip)
+        self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
 
 
 class TestCoggingStep(unittest.TestCase):
@@ -409,6 +455,11 @@ class TestCoggingStep(unittest.TestCase):
         out, checks = self.run_step(cogging.StickSlip('not steady'))
         self.assertIn('not applied', out)
         self.assertEqual(checks[0][:2], ('cogging', False))
+
+    def test_says_when_the_drive_has_no_table(self):
+        with mock.patch.object(cogging, 'read_table', return_value={'bins': []}):
+            out, _ = self.run_step(cogging.StickSlip('not steady'))
+        self.assertIn('NO cogging table', out)
 
     def test_a_ripple_not_lowered_is_a_warning(self):
         out, _ = self.run_step(cogging.SysidError('did not come down'))
