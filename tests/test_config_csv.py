@@ -565,3 +565,12 @@ class TestFriction(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestReal32Hex(unittest.TestCase):
+    def test_hex_in_a_real32_cell_is_refused(self):
+        from p4core import config_csv
+        with self.assertRaises(ValueError):
+            config_csv.encode('REAL32', '0x3c71d65c')
+        self.assertEqual(config_csv.encode('REAL32', '0.0147605799')[1], 0.0147605799)
+        config_csv.encode('UNSIGNED32', '0x3c71d65c')     # integers keep hex

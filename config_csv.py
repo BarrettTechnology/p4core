@@ -362,6 +362,11 @@ def encode(datatype, data, node_id=None):
     except (SyntaxError, TypeError, KeyError, ZeroDivisionError) as exc:
         raise ValueError('bad value {!r}: {}'.format(data, exc)) from exc
     if datatype == 'REAL32':
+        # 0x... in a REAL32 cell is ambiguous: as a number it is ~1e9, as float
+        # bits a small gain. 2026-11-19 a velocity Kp of 0x3c71d65c loaded as
+        # 1.01e9 and drove the motor between +-peak current. Refuse it.
+        if str(data).strip().lower().lstrip('+-').startswith('0x'):
+            raise ValueError('{} is hex in a REAL32 cell; write the decimal value'.format(data))
         try:
             return struct.pack('<f', float(value)), value
         except (OverflowError, ValueError) as exc:
