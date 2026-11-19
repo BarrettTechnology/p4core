@@ -703,6 +703,11 @@ def _encoder_ks(dev):
 #: took 30 rpm ripple 25.7 -> 5.4 rpm (QTM 10 rpm 74-80 % -> 31-37 %).
 STIFF_KP_X = 2.0
 STIFF_KI_X = 3.5
+#: ... and Ki at least this x the stiffer Kp: an autotuned loop can start with
+#: Ki 15-35x under a hand tune (node 15: Kp 0.0097, Ki 2-6e-5 from the
+#: velocity design), and 3.5x of that still stick-slipped at 30 rpm.  The
+#: hand capture that held: Kp 0.039, Ki 0.00274 (0.07).
+STIFF_KI_PER_KP = 0.07
 
 
 def calibrate(dev, pole_pairs, log=None, **kw):
@@ -722,19 +727,21 @@ def calibrate(dev, pole_pairs, log=None, **kw):
     except StickSlip as exc:
         kp = float(steptest.read(dev, 'vel_kp'))
         ki = float(steptest.read(dev, 'vel_ki'))
+        kp_s = kp * STIFF_KP_X
+        ki_s = max(ki * STIFF_KI_X, kp_s * STIFF_KI_PER_KP)
         log('cogging: {}'.format(exc))
         log('cogging: capturing again with the velocity loop held stiffer for '
             'the captures (Kp {:.4g} -> {:.4g}, Ki {:.4g} -> {:.4g}); the '
             'configured gains are restored after'.format(
-                kp, kp * STIFF_KP_X, ki, ki * STIFF_KI_X))
+                kp, kp_s, ki, ki_s))
         try:
-            steptest.write(dev, 'vel_kp', kp * STIFF_KP_X)
-            steptest.write(dev, 'vel_ki', ki * STIFF_KI_X)
+            steptest.write(dev, 'vel_kp', kp_s)
+            steptest.write(dev, 'vel_ki', ki_s)
             rec = _calibrate(dev, pole_pairs, log, **kw)
         finally:
             steptest.write(dev, 'vel_kp', kp)
             steptest.write(dev, 'vel_ki', ki)
-        rec['stiff_loop'] = dict(kp=kp * STIFF_KP_X, ki=ki * STIFF_KI_X)
+        rec['stiff_loop'] = dict(kp=kp_s, ki=ki_s)
         return rec
 
 

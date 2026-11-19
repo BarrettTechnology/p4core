@@ -431,6 +431,25 @@ class TestStiffRetry(unittest.TestCase):
         self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
         self.assertIn('stiff_loop', rec)
 
+    def test_a_very_low_ki_is_raised_to_the_ratio(self):
+        regs = {'vel_kp': 0.0097, 'vel_ki': 2.2e-5}       # an autotuned start
+        seen = []
+
+        def fake(dev, pp, log, **kw):
+            seen.append((regs['vel_kp'], regs['vel_ki']))
+            if len(seen) == 1:
+                raise cogging.StickSlip('not steady')
+            return {'passed': True}
+
+        with mock.patch.object(cogging, '_calibrate', side_effect=fake), \
+                mock.patch.object(cogging.steptest, 'read', lambda d, k: regs[k]), \
+                mock.patch.object(cogging.steptest, 'write',
+                                  lambda d, k, v: regs.__setitem__(k, v)):
+            cogging.calibrate(object(), 7)
+        kp_s = 0.0097 * cogging.STIFF_KP_X
+        self.assertAlmostEqual(seen[1][1], kp_s * cogging.STIFF_KI_PER_KP)
+        self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0097, 2.2e-5))
+
     def test_gains_restored_when_the_stiff_retry_fails_too(self):
         rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
                                         cogging.StickSlip('still not steady')])
