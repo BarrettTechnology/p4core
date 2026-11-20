@@ -80,6 +80,10 @@ class SaveRefused(SdoAbortedError if SdoAbortedError is not Exception
 STATUSWORD = (0x6041, 0)
 OPERATION_ENABLED = 0x4
 NMT_START, NMT_PRE_OP = 0x01, 0x80
+MODE_DISPLAY = (0x6061, 0)
+CONTROLWORD = (0x6040, 0)
+SHUTDOWN = 0x06                         # -> Ready to Switch On
+DISABLE_TIMEOUT_S = 0.5
 
 
 def _refused(exc):
@@ -95,6 +99,31 @@ def _outputs_on(node):
     return bool(sw & OPERATION_ENABLED)
 
 
+def _disable_idle(node, timeout=DISABLE_TIMEOUT_S, sleep=time.sleep,
+                  clock=time.monotonic):
+    """Drop an enabled drive in IDLE to Ready to Switch On; True when it went.
+
+    An enabled K64 holds the bridge on in IDLE (the active short), so its
+    firmware refuses the save while "operation enabled", though nothing is
+    being driven.  A calibration that ends in IDLE and saves (the bias) is
+    taken out of the enable: Shutdown is no change to the motor's state but
+    the brake.  A drive enabled in any other mode is left alone (False)."""
+    try:
+        mode = int.from_bytes(bytes(node.sdo.upload(*MODE_DISPLAY))[:1], 'little',
+                              signed=True)
+        if mode != 0:
+            return False
+        node.sdo.download(*CONTROLWORD, SHUTDOWN.to_bytes(2, 'little'))
+    except Exception:
+        return False
+    deadline = clock() + timeout
+    while _outputs_on(node):
+        if clock() >= deadline:
+            return False
+        sleep(POLL_INTERVAL_S)
+    return True
+
+
 def in_pre_op(node, action, restore=True):
     """Run *action()*, an NV write; return what it returns.
 
@@ -102,13 +131,23 @@ def in_pre_op(node, action, restore=True):
     0x08000022, as it does while the outputs are on.  On that abort with the
     outputs off, send *node* to PRE-OP, run *action()* again and, with
     *restore*, start the node again afterwards (it was OPERATIONAL: it
-    answered the SDO and refused).  Leave *restore* off when a reset follows.
-    Any other abort, or the refusal with the outputs on, is raised."""
+    answered the SDO and refused).  Leave *restore* off when a reset
+    follows.  Refused with the outputs on in IDLE (the K64's active short),
+    the drive is shut down first (_disable_idle()).  Any other abort, or the
+    refusal with the outputs on in another mode, is raised."""
     try:
         return action()
     except SdoAbortedError as exc:
-        if not _refused(exc) or _outputs_on(node):
+        if not _refused(exc):
             raise
+        if _outputs_on(node):
+            if not _disable_idle(node):
+                raise
+            try:                        # already PRE-OP: this write takes
+                return action()
+            except SdoAbortedError as exc2:
+                if not _refused(exc2) or _outputs_on(node):
+                    raise
     node.nmt.send_command(NMT_PRE_OP)
     try:
         return action()

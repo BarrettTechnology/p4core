@@ -52,6 +52,9 @@ class Sdo:
             assert data == SIG
         else:
             self.od[index, sub] = data
+            if (index, sub) == nvsave.CONTROLWORD:
+                self.log.append(('cw', int.from_bytes(data, 'little')))
+                self.enabled = data != nvsave.SHUTDOWN.to_bytes(2, 'little')
 
 
 def node(ranges, **kw):
@@ -248,6 +251,37 @@ class PreOp(unittest.TestCase):
 
     def test_enabled_is_refused_without_touching_nmt(self):
         n = node(True, enabled=True, operational=True)
+        with self.assertRaises(nvsave.SaveRefused):
+            nvsave.save_all(n)
+        n.nmt.send_command.assert_not_called()
+
+    def test_enabled_in_idle_is_shut_down_and_saved_in_pre_op(self):
+        # The K64 holds the bridge on (active short) in an enabled IDLE.
+        n = node(True, enabled=True, operational=True)
+        n.sdo.od[nvsave.MODE_DISPLAY] = b'\x00'
+        nvsave.save_all(n)
+        self.assertEqual(n.sdo.saves, [nvsave.ALL])
+        log = [e for e in n.sdo.log if e[0] != 'poll']
+        self.assertEqual(log, [('cw', 0x06), ('nmt', 0x80), ('save', nvsave.ALL),
+                               ('nmt', 0x01)])
+        self.assertFalse(n.sdo.enabled)
+
+    def test_enabled_in_idle_in_pre_op_needs_no_nmt(self):
+        n = node(True, enabled=True)
+        n.sdo.od[nvsave.MODE_DISPLAY] = b'\x00'
+        nvsave.save_all(n)
+        self.assertEqual(n.sdo.saves, [nvsave.ALL])
+        n.nmt.send_command.assert_not_called()
+
+    def test_a_drive_that_stays_enabled_is_refused(self):
+        n = node(True, enabled=True, operational=True)
+        n.sdo.od[nvsave.MODE_DISPLAY] = b'\x00'
+        real = n.sdo.download
+
+        def ignore_shutdown(index, sub, data):
+            if (index, sub) != nvsave.CONTROLWORD:
+                real(index, sub, data)
+        n.sdo.download = ignore_shutdown
         with self.assertRaises(nvsave.SaveRefused):
             nvsave.save_all(n)
         n.nmt.send_command.assert_not_called()

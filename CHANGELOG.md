@@ -10,6 +10,9 @@ app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 ### Changed
 - The EDS is firmware 5.0.9's. The NV list adds `0x3017,8` (field weakening on/off) and `0x3017,9` (overmodulation), both saved since 5.0.8.
 
+### Fixed
+- A save from a K64 drive left enabled in IDLE is no longer refused. An enabled K64 holds the bridge on in IDLE (the active short), so 5.0.7+ refused the save (0x08000022) and `in_pre_op` gave up because the outputs read as on; the current-sense bias step failed this way. A drive enabled in IDLE is now shut down (controlword 0x06) and saved through PRE-OP. A drive enabled in any other mode is still refused.
+
 ## [0.1.2] - 2026-11-13
 
 ### Changed
