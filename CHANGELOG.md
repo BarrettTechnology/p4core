@@ -5,6 +5,11 @@ All notable changes to p4core are documented in this file. The format follows
 wheel next to the apps that need it (the A/B test package carries both); an
 app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 
+## [0.1.3] - 2026-11-20
+
+### Changed
+- The EDS is firmware 5.0.9's. The NV list adds `0x3017,8` (field weakening on/off) and `0x3017,9` (overmodulation), both saved since 5.0.8.
+
 ## [0.1.2] - 2026-11-13
 
 ### Changed
