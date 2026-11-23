@@ -12,6 +12,9 @@ app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 - The default actuator calibration (`plans.ACTUATOR`) is now steps 1-4: encoder, bias, gain, electrical zero + winding order. The new `plans.EXTENDED` adds current-sense slope and fold, runout, friction and cogging, and `PLANS['extended']` ("Extended Calibration") runs all eight. Without slope and fold, the slope and fold already on the drive are left as they are.
 - Current-sense slope and the offset fold are one step, `slope` ("Current-sense slope and fold"): the sweep, then its drive-on baseline folded into the drive-gated offset register. `fold` and `offset-fold` are aliases for it. p4sysid keeps them as two steps (Settling's prefold sits between them, and both re-run after a PWM change).
 
+### Fixed
+- A slow drag no longer trips the drive's dead-man. One drag step is a single arm, and a ramp longer than INJ_MAX_MS (5 s) let the firmware time the injection out; that read as a pull-out, and each halving of the acceleration made the ramp longer still, so the step failed "even after 2 halvings" (the 200 -> 1000 rpm step ramps 4.2 s at 20 rad/s^2). Each wait now re-arms the same target every 2.5 s (`DRAG_KEEPALIVE_S`); the firmware keeps the field's speed across the re-arm and only restarts the timer.
+
 ### Removed
 - `p4core.tuning` (pucktuner's gain design and PWM selection) is now `p4sysid.tuning`. Gain design belongs to p4sysid alone.
 

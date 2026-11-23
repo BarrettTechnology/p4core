@@ -642,6 +642,12 @@ VOLT_PAIR_S = 0.3 / STREAM_SYNC_HZ
 #: The spring rings on after each ramp; a cruise's voltage is taken from
 #: this long after the ramp ends, over whole revolutions.
 DRAG_CRUISE_SETTLE_S = 0.05
+#: Longest wait between drag arms.  A ramp at a halved acceleration over a
+#: wide step (or back to rest from the top) outlasts the dead-man, INJ_MAX_MS,
+#: which trips the drive and reads as a pull-out; re-arming with the same
+#: target and acceleration only restarts it (app/inject.c: the field keeps
+#: its speed).
+DRAG_KEEPALIVE_S = INJ_MAX_MS / 1000.0 / 2.0
 #: Commutation latency (0x3013,7 in 0.01 PWM period, 0x3013,5 in us): the
 #: request is applied that long after the angle it was turned through.
 OD_ENC_LATENCY_CP = (0x3013, 7)
@@ -2307,6 +2313,17 @@ class P4Drive:
                 raise SysidError('the drag reports state {} {}'.format(
                     state, what))
 
+        def wait(seconds, counts_per_s, what):
+            """_stream_sleep, re-arming the same target every
+            DRAG_KEEPALIVE_S so a long ramp does not outlast the dead-man.
+            Checked first: a tripped drive refuses the re-arm."""
+            while seconds > DRAG_KEEPALIVE_S:
+                self._stream_sleep(DRAG_KEEPALIVE_S)
+                seconds -= DRAG_KEEPALIVE_S
+                check(what)
+                rpdo.go(counts_per_s)
+            self._stream_sleep(seconds)
+
         with (_VoltStream(self) if self._has_volt_stream()
               else contextlib.nullcontext()) as vstream, \
                 _Stream(self, LOG_SRC_IQR_POS) as stream, \
@@ -2321,15 +2338,16 @@ class P4Drive:
                     self._check_abort()
                     # The ramps to and from rest by SDO, with no data taken.
                     start = min(accel_rad_s2, DRAG_START_ACCEL_RAD_S2)
+                    first = self.rpm_to_counts_per_s(sign * levels[0])
                     self._inject_arm(INJ_DRAG, INJ_MAX_MS, {
-                        OD_INJECT_DRAG_VEL: self.rpm_to_counts_per_s(
-                            sign * levels[0]),
+                        OD_INJECT_DRAG_VEL: first,
                         OD_INJECT_DRAG_ACC: acc_cts(start),
                         OD_INJECT_DRAG_DAMP: damp})
-                    self._stream_sleep(ramp_s(0, levels[0], start)
-                                       + DRAG_SETTLE_S)
+                    what = 'reaching {} rpm'.format(sign * levels[0])
                     try:
-                        check('reaching {} rpm'.format(sign * levels[0]))
+                        wait(ramp_s(0, levels[0], start) + DRAG_SETTLE_S,
+                             first, what)
+                        check(what)
                     except _DragPulledOut as exc:
                         exc.accel_rad_s2 = start
                         raise
@@ -2365,19 +2383,20 @@ class P4Drive:
                         cruise = max(DRAG_CRUISE_S,
                                      DRAG_CRUISE_REVS * 60.0 / rpm)
                         m = stream.mark()
-                        rpdo.go(self.rpm_to_counts_per_s(sign * rpm))
+                        want = self.rpm_to_counts_per_s(sign * rpm)
+                        rpdo.go(want)
                         ramp = ramp_s(now, rpm, accel)
-                        self._stream_sleep(ramp + cruise)
+                        what = 'stepping {} -> {} rpm'.format(sign * now,
+                                                              sign * rpm)
                         try:
-                            check('stepping {} -> {} rpm'.format(sign * now,
-                                                                 sign * rpm))
+                            wait(ramp + cruise, want, what)
+                            check(what)
                         except _DragPulledOut as exc:
                             exc.accel_rad_s2 = accel
                             raise
                         # The RPDO has no answer; the field speed is the
                         # proof it was taken.
                         field = self._inject_read_signed32(OD_INJECT_DRAG_NOW)
-                        want = self.rpm_to_counts_per_s(sign * rpm)
                         if abs(field - want) > 0.02 * abs(want) + 1:
                             raise SysidError(
                                 'the drag RPDO for {} rpm was not taken: the '
@@ -2389,7 +2408,8 @@ class P4Drive:
                     self._inject_arm(INJ_DRAG, INJ_MAX_MS, {
                         OD_INJECT_DRAG_VEL: 0,
                         OD_INJECT_DRAG_ACC: acc_cts(start)})
-                    self._stream_sleep(ramp_s(now, 0, start) + DRAG_SETTLE_S)
+                    wait(ramp_s(now, 0, start) + DRAG_SETTLE_S, 0,
+                         'returning to rest')
                     check('returning to rest')
             finally:
                 self.safe_stop()
