@@ -129,7 +129,7 @@ class FitTests(unittest.TestCase):
 
 
 class SlopeStepGradeTests(unittest.TestCase):
-    """steps._r_slope grades "no slope that tracks the load" as it grades
+    """steps._slope_sweep grades "no slope that tracks the load" as it grades
     "too noisy to trust": both leave the correction off and pass.  It was
     WARN in one run and PASS in the next on one board (node 15)."""
 
@@ -141,7 +141,7 @@ class SlopeStepGradeTests(unittest.TestCase):
         with mock.patch.object(steps, '_clear_board_corrections'), \
                 mock.patch('p4core.actuator.slope.calibrate_current_slope',
                            return_value=r):
-            return steps._r_slope(s), checks
+            return steps._slope_sweep(s), checks
 
     def base(self, **kw):
         r = dict(stored=False, zeroed=False, gain_ok=True, slope_ok=True,
@@ -163,6 +163,46 @@ class SlopeStepGradeTests(unittest.TestCase):
     def test_a_bad_gain_still_warns(self):
         _, checks = self.grade(self.base(gain_ok=False, effect_ok=False))
         self.assertEqual(checks[0][:2], ('Slope', False))
+
+
+class SlopeAndFoldStepTests(unittest.TestCase):
+    """steps._r_slope is one step: the sweep, then the fold from it."""
+
+    def run_step(self, r, fold=None):
+        from p4core.actuator import steps
+        s = mock.Mock(ctx={})
+        s.rep.check = lambda *a, **k: None
+        fold = fold or mock.Mock(return_value=dict(a0=12, b0=-7, path='SDO'))
+        with mock.patch.object(steps, '_clear_board_corrections'), \
+                mock.patch('p4core.actuator.slope.calibrate_current_slope',
+                           return_value=r), \
+                mock.patch('p4core.actuator.slope.fold_baseline_offset',
+                           fold):
+            return steps._r_slope(s), fold
+
+    def test_the_sweep_then_the_fold(self):
+        r = dict(stored=True, kA=0.01, kB=-0.02)
+        out, fold = self.run_step(r)
+        self.assertIs(fold.call_args[0][1], r)        # this run's sweep
+        self.assertIn('kA +0.0100', out)
+        self.assertIn('fold a0 +12, b0 -7 mA', out)
+
+    def test_a_skipped_sweep_skips_the_fold(self):
+        out, fold = self.run_step(dict(skipped='no capture'))
+        fold.assert_not_called()
+        self.assertIn('fold not run', out)
+
+    def test_a_refused_fold_fails_the_step(self):
+        from p4core.actuator import steps
+        from p4core.actuator.drivecal import CalError
+        with self.assertRaises(steps.StepFailed):
+            self.run_step(dict(stored=True, kA=0.0, kB=0.0),
+                          fold=mock.Mock(side_effect=CalError('gate')))
+
+    def test_one_step_with_the_old_name_as_an_alias(self):
+        from p4core.actuator import plans
+        self.assertNotIn('fold', plans.steps.STEP_KEYS)
+        self.assertEqual(plans.expand(['fold', 'slope']), ['slope'])
 
 
 class SlopeCalTests(unittest.TestCase):

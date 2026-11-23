@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from p4core import config_csv, firmware, tuning  # noqa: E402
+from p4core import config_csv, firmware  # noqa: E402
 from p4core.reporter import Reporter  # noqa: E402
 from p4core.tests.fake import FakeNode, current_node, legacy_node  # noqa: E402
 
@@ -81,30 +81,6 @@ class DetectTest(unittest.TestCase):
         self.assertAlmostEqual(firmware.lt_h(new, 98), 98e-6)
         self.assertEqual(firmware.rt_raw(old, 0.28), 28)
         self.assertEqual(firmware.lt_raw(new, 98e-6), 98)
-
-
-def _tuning_values(node, rt, lt, bw):
-    node.values.update({
-        (0x3011, 5): rt, (0x3011, 6): lt, (0x3011, 4): 27, (0x3011, 3): 14,
-        (0x3011, 7): 0, (0x3011, 8): 5000, (0x3011, 9): 20000,
-        (0x6076, 0): 400, (0x3001, 1): 60000, (0x3024, 1): 0, (0x3024, 2): 100,
-        (0x3024, 3): 100, (0x3024, 4): bw, (0x3024, 5): 100, (0x3024, 6): 0,
-        (0x3024, 7): 0, (0x3024, 8): 0, (0x2100, 1): 0})
-    return node
-
-
-class TuningParamsTest(unittest.TestCase):
-    def test_legacy_units(self):
-        p = tuning.read_params(_tuning_values(legacy_node(), 28, 17, 100))
-        self.assertAlmostEqual(p['resistance'], 0.28)
-        self.assertAlmostEqual(p['inductance'], 170e-6)
-        self.assertIsNone(p['bandwidth_hz'])    # 100 was a gain factor
-
-    def test_current_units(self):
-        p = tuning.read_params(_tuning_values(current_node(), 290, 98, 100))
-        self.assertAlmostEqual(p['resistance'], 0.29)
-        self.assertAlmostEqual(p['inductance'], 98e-6)
-        self.assertAlmostEqual(p['bandwidth_hz'], 10.0)
 
 
 LEGACY_CSV = """\

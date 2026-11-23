@@ -50,11 +50,10 @@ DEPS = {
     'bias': _d(provides=['isense_bias']),
     'gain': _d(requires=['isense_bias'], uses=['i_cal'],
                provides=['isense_gain']),
+    # Slope & fold: the sweep, then its drive-on baseline folded in.
     'slope': _d(requires=['isense_bias', 'isense_gain'],
                 uses=['settling_time', 'i_cal', 'pwm'],
-                provides=['isense_slope']),
-    'fold': _d(requires=['isense_slope'], uses=['pwm'],
-               provides=['isense_fold']),
+                provides=['isense_slope', 'isense_fold']),
     # Winding and cogging drive measured current: the current sense is
     # calibrated first (this also places them when p4sysid is absent).
     'winding': _d(requires=['i_test', 'poles', 'isense_gain'],

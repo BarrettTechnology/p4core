@@ -11,8 +11,9 @@ Each app is split model / controller / view:
 * **controllers** — plain functions (`p4core.ops`, and each app's own
   `controllers` module) that take a Session, node IDs, options and a
   `Reporter`, and return results.  No printing, no dialogs.
-* **shared algorithms** — `tuning` (pucktuner's current / velocity /
-  position gain design and PWM selection), `ezero`, `calibrate`.
+* **shared algorithms** — `ezero`, `calibrate`, `actuator`.  Gain design
+  is not here: it is p4sysid's (`p4sysid.tuning`, pucktuner), and nothing in
+  p4core changes a loop gain.
 * **views** — `cli` (argparse subcommands, `ConsoleReporter`) and the wx GUI
   (each app's own `WxReporter`), both calling the same controllers.  The one
   wx module is `canbar`, the CAN Port / Scan Pucks / Select ID bar the

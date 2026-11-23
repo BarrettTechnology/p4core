@@ -9,7 +9,11 @@ app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 
 ### Changed
 - The actuator calibration no longer changes any loop gain. The friction step used to rescale the velocity Kp/Ki to each drag's J (with no prompt under a script), so repeat calibrations of one actuator left it with different gains and different performance. That rescale is now p4sysid's (pucktuner): `steps._r_friction` takes an `after_drag` hook between the drag and the Coulomb feed-forward, and p4sysid's friction step uses it.
-- The default actuator calibration (`plans.ACTUATOR`) is now steps 1-5: encoder, bias, gain, slope, electrical zero + winding order. The new `plans.EXTENDED` adds fold, runout, friction and cogging, and `PLANS['extended']` ("Extended Calibration") runs all nine. Fold now runs after winding, so the default steps are numbered 1-5 and the extended steps 6-9. If fold does not run, the drive-gated offset register stays cleared: the slope step clears it.
+- The default actuator calibration (`plans.ACTUATOR`) is now steps 1-4: encoder, bias, gain, electrical zero + winding order. The new `plans.EXTENDED` adds current-sense slope & fold, runout, friction and cogging, and `PLANS['extended']` ("Extended Calibration") runs all eight. Without slope & fold, the slope and fold already on the drive are left as they are.
+- Current-sense slope and the offset fold are one step, `slope` ("Current-sense slope & fold"): the sweep, then its drive-on baseline folded into the drive-gated offset register. `fold` and `offset-fold` are aliases for it. p4sysid keeps them as two steps (Settling's prefold sits between them, and both re-run after a PWM change).
+
+### Removed
+- `p4core.tuning` (pucktuner's gain design and PWM selection) is now `p4sysid.tuning`. Gain design belongs to p4sysid alone.
 
 ## [0.1.3] - 2026-11-20
 

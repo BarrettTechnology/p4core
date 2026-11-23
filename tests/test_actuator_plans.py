@@ -14,7 +14,7 @@ from p4core.tests.fake import current_node, legacy_node          # noqa: E402
 
 # p4sysid registers its steps into the same tables; without it these are
 # the actuator steps alone.
-ALONE = ('encoder', 'bias', 'gain', 'slope', 'winding', 'fold', 'runout',
+ALONE = ('encoder', 'bias', 'gain', 'winding', 'slope', 'runout',
          'friction', 'cogging', 'save', 'export')
 
 
@@ -60,17 +60,19 @@ class Alone(unittest.TestCase):
         got = [(st.key, stage)
                for _, stage, st in plans.numbered(plans.ACTUATOR_ALL)]
         self.assertEqual(got, [('encoder', 1), ('bias', 1), ('gain', 2),
-                               ('slope', 3), ('winding', 3), ('fold', 4),
+                               ('winding', 3), ('slope', 3),
                                ('runout', 4), ('friction', 4),
                                ('cogging', 4)])
 
-    def test_default_is_the_first_five_numbered_steps(self):
-        # The menus number the default 1-5 and the extended steps 6-9, both
+    def test_default_is_the_first_four_numbered_steps(self):
+        # The menus number the default 1-4 and the extended steps 5-8, both
         # by stage and in run order.
         self.assertEqual(plans.ACTUATOR,
-                         ('encoder', 'bias', 'gain', 'slope', 'winding'))
+                         ('encoder', 'bias', 'gain', 'winding'))
         self.assertEqual(plans.EXTENDED,
-                         ('fold', 'runout', 'friction', 'cogging'))
+                         ('slope', 'runout', 'friction', 'cogging'))
+        self.assertEqual(plans.title('slope'), 'Current-sense slope & fold')
+        self.assertEqual(plans.canonical('fold'), 'slope')
         self.assertEqual(plans.run_order(plans.ACTUATOR_ALL),
                          list(plans.ACTUATOR_ALL))
         staged = [st.key for _, _, st in plans.numbered(plans.ACTUATOR_ALL)]

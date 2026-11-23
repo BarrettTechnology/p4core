@@ -102,19 +102,16 @@ def _upload_i16(dev, index, sub):
 
 
 def _p_slope(dev):
+    """The slope (0x3008,7 / 0x3009,7) and the fold (0x3008,8 / 0x3009,8)."""
     ka, kb = _upload_i16(dev, 0x3008, 7), _upload_i16(dev, 0x3009, 7)
     if ka is None:
         return 'n/a (firmware)'
-    if not ka and not kb:
-        return 'off'
-    return 'kA {:+.4f}  kB {:+.4f}'.format(ka / 4096.0, kb / 4096.0)
-
-
-def _p_fold(dev):
+    slope = ('off' if not ka and not kb else
+             'kA {:+.4f}  kB {:+.4f}'.format(ka / 4096.0, kb / 4096.0))
     a0, b0 = _upload_i16(dev, 0x3008, 8), _upload_i16(dev, 0x3009, 8)
     if a0 is None:
-        return 'n/a (firmware)'
-    return 'a0 {:+d}  b0 {:+d} mA'.format(a0, b0)
+        return slope
+    return '{}; fold a0 {:+d}  b0 {:+d} mA'.format(slope, a0, b0)
 
 
 def _p_winding(dev):
@@ -676,7 +673,7 @@ def _r_gain(s):
     return _current_sense(s, 'gain')
 
 
-def _r_slope(s):
+def _slope_sweep(s):
     """Current-proportional current-sense offset, 0x3008,7 / 0x3009,7
     (slope).  One retry over SDO if the PDO read fails.  A fit too
     noisy to trust (poor R^2, or the slope within noise of zero) stores 0
@@ -721,24 +718,32 @@ def _r_slope(s):
     return 'kA {:+.4f}, kB {:+.4f} (saved)'.format(r['kA'], r['kB'])
 
 
-def _r_fold(s):
+def _fold_offset(s):
     """The slope sweep's drive-on baseline into the drive-gated offset
-    register (slope.fold_baseline_offset).  Needs the slope sweep
-    from this run.  With no slope term in effect (stored as 0, or not stored
-    because the offset does not track load) it folds the mean offset; only a
-    sweep that failed its gain/magnitude sanity gate is refused."""
+    register (slope.fold_baseline_offset), from this step's sweep.  With no
+    slope term in effect (stored as 0, or not stored because the offset does
+    not track load) it folds the mean offset; only a sweep that failed its
+    gain/magnitude sanity gate is refused."""
     from . import slope
-    sl = s.ctx.get('slope')
-    if not sl or sl.get('skipped'):
-        raise StepFailed('needs the slope sweep from this run: select Slope '
-                         'too')
+    sl = s.ctx['slope']
     try:
         r = slope.fold_baseline_offset(s.dev.node, sl, _Reporter(s))
     except CalError as exc:
         raise StepFailed(str(exc))
-    return 'a0 {:+.0f}, b0 {:+.0f} mA ({}) -> {} (saved)'.format(
+    return 'fold a0 {:+.0f}, b0 {:+.0f} mA ({}) -> {} (saved)'.format(
         r['a0'], r['b0'], 'mean offset, no slope term' if r.get('basis') == 'mean'
         else 'fit intercept', r['path'])
+
+
+def _r_slope(s):
+    """Current-sense slope & fold, one step: the slope sweep (_slope_sweep),
+    then its drive-on baseline folded into the drive-gated offset register
+    (_fold_offset), which needs that same sweep.  A sweep skipped (no
+    capture) skips the fold too."""
+    detail = _slope_sweep(s)
+    if s.ctx['slope'].get('skipped'):
+        return detail + '; fold not run'
+    return '{}; {}'.format(detail, _fold_offset(s))
 
 
 def _r_winding_legacy(s):
@@ -984,13 +989,12 @@ STEPS = (
          _r_encoder),
     Step('bias', 'Board', 'Current-sense bias', _p_bias, _r_bias),
     Step('gain', 'Board', 'Current-sense gain', _p_gain, _r_gain),
-    Step('slope', 'Board', 'Current-sense slope', _p_slope, _r_slope),
     Step('winding', 'Identify', 'Electrical zero + winding order', _p_winding,
          _r_winding),
-    # The extended calibration (plans.EXTENDED) from here.  Fold after
-    # winding so the default calibration is the first five steps; it needs
-    # only this run's slope sweep.
-    Step('fold', 'Board', 'Current-sense offset fold', _p_fold, _r_fold),
+    # The extended calibration (plans.EXTENDED) from here, so the default is
+    # the first four steps.  Selected, slope still clears the old slope and
+    # fold before bias and gain run (_clear_board_corrections).
+    Step('slope', 'Board', 'Current-sense slope & fold', _p_slope, _r_slope),
     Step('runout', 'Encoder', 'Encoder runout table', _p_runout, _r_runout),
     # Before cogging: its slow spins carry the ff (on any trajectory) and
     # stick and slip without it on a geared motor.
@@ -1014,7 +1018,6 @@ NEEDS = {
     'encoder': (), 'bias': (), 'gain': (), 'winding': (), 'save': (),
     'export': ('current_line',),
     'slope': _CAPTURE + ('isense_slope',),
-    'fold': _CAPTURE + ('isense_slope',),
     'runout': _CAPTURE + ('runout',),
     'friction': _CAPTURE,
     'cogging': _CAPTURE + ('cogging',),
