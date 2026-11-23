@@ -736,7 +736,7 @@ def _fold_offset(s):
 
 
 def _r_slope(s):
-    """Current-sense slope & fold, one step: the slope sweep (_slope_sweep),
+    """Current-sense slope and fold, one step: the slope sweep (_slope_sweep),
     then its drive-on baseline folded into the drive-gated offset register
     (_fold_offset), which needs that same sweep.  A sweep skipped (no
     capture) skips the fold too."""
@@ -994,7 +994,7 @@ STEPS = (
     # The extended calibration (plans.EXTENDED) from here, so the default is
     # the first four steps.  Selected, slope still clears the old slope and
     # fold before bias and gain run (_clear_board_corrections).
-    Step('slope', 'Board', 'Current-sense slope & fold', _p_slope, _r_slope),
+    Step('slope', 'Board', 'Current-sense slope and fold', _p_slope, _r_slope),
     Step('runout', 'Encoder', 'Encoder runout table', _p_runout, _r_runout),
     # Before cogging: its slow spins carry the ff (on any trajectory) and
     # stick and slip without it on a geared motor.

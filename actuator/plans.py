@@ -11,7 +11,7 @@ whose results differ unit to unit and that the CSV does not carry.
               bias, gain       current-sense offsets and gain
               winding          electrical zero and winding order
   EXTENDED  the optional steps the Extended Calibration adds to it:
-              slope            current-sense slope & fold: the shunt
+              slope            current-sense slope and fold: the shunt
                                amplifier's current-proportional offset,
                                then the sweep's drive-on baseline
               runout           the magnet's runout table
@@ -25,7 +25,7 @@ No step changes a loop gain: tuning is p4sysid's (pucktuner), and a gain
 search here would make two runs on one actuator measure different drives.
 The default leaves out the steps whose result is a keep-or-drop judgement
 (the ff and cogging A/Bs) or that need the loops, so it repeats run to run.
-Without slope & fold, the slope and fold an earlier extended run stored stay
+Without slope and fold, the slope and fold an earlier extended run stored stay
 as they are (steps._clear_board_corrections clears them only when the slope
 is re-measured).
 

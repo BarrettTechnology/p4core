@@ -71,7 +71,7 @@ class Alone(unittest.TestCase):
                          ('encoder', 'bias', 'gain', 'winding'))
         self.assertEqual(plans.EXTENDED,
                          ('slope', 'runout', 'friction', 'cogging'))
-        self.assertEqual(plans.title('slope'), 'Current-sense slope & fold')
+        self.assertEqual(plans.title('slope'), 'Current-sense slope and fold')
         self.assertEqual(plans.canonical('fold'), 'slope')
         self.assertEqual(plans.run_order(plans.ACTUATOR_ALL),
                          list(plans.ACTUATOR_ALL))
