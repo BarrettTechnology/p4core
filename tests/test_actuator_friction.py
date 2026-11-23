@@ -87,16 +87,16 @@ class TestPpMove(unittest.TestCase):
 
 
 class TestFrictionStep(unittest.TestCase):
-    """steps._r_friction: the drag, the velocity gains rescaled to its J,
-    then the ff on its Tc.  The drag's physics is p4sysid's test_device."""
+    """steps._r_friction: the drag, then the ff on its Tc, with no loop gain
+    touched.  The rescale p4sysid hooks in is p4sysid's test_steps; the
+    drag's physics is its test_device."""
 
-    def _run(self, j_was, j_drag, has_ff=True, answer=True):
+    def _run(self, j_was, j_drag, has_ff=True, after_drag=None):
         regs = {'vel_kp': 0.004, 'vel_ki': 0.2}
         s = mock.Mock(values={}, ctx={'coast': {'j_kg_m2': j_was}},
                       limits=commission.Limits(), log=lambda *_: None)
         self.asked = []
-        s.confirm = lambda q, default=False: self.asked.append(
-            (q, default)) or answer
+        s.confirm = lambda q, default=False: self.asked.append(q) or True
         s.dev.node = object()
         writes = []
         s.write = lambda *keys: writes.append(keys)
@@ -106,6 +106,7 @@ class TestFrictionStep(unittest.TestCase):
                             b_nm_s_per_rad=1e-6)
         s.stage = lambda fn: fn(s.dev, s.limits, None, s.rep)
         ff = []
+        gains_at_ff = []
         with mock.patch.object(commission, '_stage_drag', drag), \
                 mock.patch.object(steptest, 'read', lambda d, k: regs[k]), \
                 mock.patch.object(steptest, 'write',
@@ -117,55 +118,45 @@ class TestFrictionStep(unittest.TestCase):
                                   lambda n: 140.0), \
                 mock.patch.object(friction, 'friction_ff',
                                   lambda dev, tc, *a, **k: ff.append(tc) or
+                                  gains_at_ff.append(dict(regs)) or
                                   {'capped': False, 'kept': True}), \
                 mock.patch.object(friction, 'summary_friction_ff',
                                   lambda r: 'ff kept'):
-            out = steps._r_friction(s)
+            out = steps._r_friction(s, after_drag) if after_drag else \
+                steps._r_friction(s)
+        self.gains_at_ff = gains_at_ff
         return out, regs, writes, ff
 
-    def test_rescales_the_velocity_gains_to_the_drag_j(self):
+    def test_a_new_j_leaves_the_velocity_gains(self):
         out, regs, writes, ff = self._run(5e-6, 6e-6)
-        self.assertAlmostEqual(regs['vel_kp'], 0.004 * 1.2)
-        self.assertAlmostEqual(regs['vel_ki'], 0.2 * 1.2)
+        self.assertEqual(regs, {'vel_kp': 0.004, 'vel_ki': 0.2})
         self.assertEqual(writes, [('j', 'tc', 'b')])
-        self.assertEqual(ff, [2.0])               # mNm, after the rescale
-        self.assertIn('x 1.200', out)
+        self.assertEqual(ff, [2.0])               # mNm
+        self.assertEqual(self.asked, [])
+        self.assertNotIn('velocity gains', out)
         self.assertIn('ff kept', out)
 
-    def test_asks_first_with_the_old_and_new_gains(self):
-        self._run(5e-6, 6e-6)
-        (q, default), = self.asked
-        self.assertTrue(q.startswith('Rescale velocity gains?\n'))
-        self.assertIn('Kp 0.004 -> 0.0048', q)
-        self.assertIn('Ki 0.2 -> 0.24', q)
-        self.assertTrue(default)        # a script keeps the old behaviour
+    def test_after_drag_runs_between_the_drag_and_the_ff(self):
+        seen = []
 
-    def test_no_keeps_the_gains(self):
-        out, regs, _, ff = self._run(5e-6, 6e-6, answer=False)
-        self.assertEqual(regs, {'vel_kp': 0.004, 'vel_ki': 0.2})
-        self.assertIn('velocity gains kept', out)
-        self.assertEqual(ff, [2.0])     # the ff still runs
-
-    def test_a_large_change_is_flagged(self):
-        self._run(21e-6, 6e-6)          # x 0.285, node 15's
-        q = self.asked[0][0]
-        self.assertIn('large change', q)
-
-    def test_same_j_leaves_the_gains(self):
-        out, regs, _, _ = self._run(6e-6, 6e-6)
-        self.assertEqual(regs, {'vel_kp': 0.004, 'vel_ki': 0.2})
-        self.assertNotIn('velocity gains', out)
-        self.assertEqual(self.asked, [])
-
-    def test_no_prior_j_leaves_the_gains(self):
-        _, regs, _, _ = self._run(None, 6e-6)
-        self.assertEqual(regs['vel_kp'], 0.004)
+        def hook(s, j_was, j):
+            seen.append((j_was, j))
+            steptest.write(s.dev, 'vel_kp', 1.0)
+            return 'hooked'
+        out, regs, _, ff = self._run(5e-6, 6e-6, after_drag=hook)
+        self.assertEqual(seen, [(5e-6, 6e-6)])
+        self.assertEqual(self.gains_at_ff[0]['vel_kp'], 1.0)
+        self.assertIn('; hooked', out)
 
     def test_firmware_without_the_ff_gets_the_drag_alone(self):
         out, _, writes, ff = self._run(6e-6, 6e-6, has_ff=False)
         self.assertEqual(writes, [('j', 'tc', 'b')])
         self.assertEqual(ff, [])
         self.assertIn('no Coulomb ff', out)
+
+    def test_no_rescale_left_in_p4core(self):
+        self.assertFalse(hasattr(steps, '_rescale_for_j'))
+        self.assertFalse(hasattr(steps, 'J_RESCALE_MIN'))
 
 
 if __name__ == '__main__':

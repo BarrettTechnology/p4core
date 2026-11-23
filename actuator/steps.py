@@ -840,67 +840,18 @@ def _top_rpm(s):
     return top
 
 
-#: The drag's J against the one the velocity loop was designed on: a
-#: change past this rescales its Kp/Ki (_rescale_for_j).
-J_RESCALE_MIN = 1e-3
-#: A rescale outside these factors is worth a second look: a config J far
-#: from the measured one, or a drag fit that went wrong.  The question says so.
-J_RESCALE_WARN = (0.5, 2.0)
-
-
-def _rescale_for_j(s, j_was, j):
-    """The velocity PI's torque per rad/s of error was designed for *j_was*
-    (the coast's, or the CSV's): the same crossover on the drag's *j* takes
-    Kp and Ki x j / j_was.  The position loop commands velocity and does not
-    care.  The user is asked first, with the old and new gains: the loop may
-    be hand-tuned on a load the drag does not see (a gearhead's).  Without
-    anyone to ask (a script) the rescale is applied, as before.  Returns
-    (factor, applied, text) or None when J did not change."""
-    if not j_was or not j or abs(j / j_was - 1) < J_RESCALE_MIN:
-        return None
-    k = j / j_was
-    old = {key: steptest.read(s.dev, key) for key in ('vel_kp', 'vel_ki')}
-    new = {key: g * k for key, g in old.items() if g}
-    if not new:
-        return None
-    gains = ', '.join('{} {:.4g} -> {:.4g}'.format(
-        'Kp' if key == 'vel_kp' else 'Ki', old[key], new[key])
-        for key in ('vel_kp', 'vel_ki') if key in new)
-    unusual = not J_RESCALE_WARN[0] <= k <= J_RESCALE_WARN[1]
-    question = (
-        'Rescale velocity gains?\n'
-        'Friction calibration measured the rotor inertia J = {:.4g} g.cm^2; '
-        'the velocity loop (0x2381,1-2) was tuned for J = {:.4g} g.cm^2.\n\n'
-        'Keeping its bandwidth on the measured J scales the gains x {:.3f}:\n'
-        '    {}\n\n{}'
-        'Yes: rescale them (saved with this step).\n'
-        'No: keep the gains as they are (choose No for a hand-tuned loop).'
-        .format(j * 1e7, j_was * 1e7, k, gains,
-                'This is a large change: check the configuration\'s J and '
-                'the drag fit.\n\n' if unusual else ''))
-    if not s.confirm(question, default=True):
-        s.log('friction: velocity gains kept ({}; J {:.4g} -> {:.4g} '
-              'g.cm^2 not applied, by request)'.format(
-                  gains.replace('->', 'would be'), j_was * 1e7, j * 1e7))
-        return k, False, 'velocity gains kept (J x {:.3f} not applied)'.format(k)
-    for key, g in new.items():
-        steptest.write(s.dev, key, g)
-    s.log('friction: velocity gains x {:.4f}: {} (J {:.4g} -> {:.4g} '
-          'g.cm^2)'.format(k, gains, j_was * 1e7, j * 1e7))
-    if unusual:
-        s.rep.check('velocity gains', False, 'rescaled x {:.3f} for the '
-                    'measured J: check the configuration\'s J'.format(k))
-    return k, True, 'velocity gains x {:.3f} ({})'.format(k, gains)
-
-
-def _r_friction(s):
+def _r_friction(s, after_drag=None):
     """Friction calibration: the drag (J, B and Coulomb Tc, with the rotor
     on a rotating field), then the Coulomb feed-forward 0x2381,3 on its Tc.
-    After the loops: the ff's PP moves need them, and they were designed on
-    the coast's (or the CSV's) J, so a drag J that differs rescales the
-    velocity gains first.  Before cogging: the firmware adds the ff on any
-    trajectory, and the cogging spins stick and slip without it on a geared
-    motor.  Firmware without 0x2381,3 gets the drag alone."""
+    After the loops: the ff's PP moves need them.  Before cogging: the
+    firmware adds the ff on any trajectory, and the cogging spins stick and
+    slip without it on a geared motor.  Firmware without 0x2381,3 gets the
+    drag alone.
+
+    No loop gain is changed here: the actuator calibration measures, it
+    does not tune.  *after_drag(s, j_was, j)* runs between the drag and the
+    ff (j_was: the J the drive held before); a text it returns joins the
+    verdict.  p4sysid passes its velocity-gain rescale there."""
     s._preflight()
     s.need('i_test', 'ld_h', 'lq_h', 'kt_nm_per_a', 'coast', 'no_load')
     j_was = s.values.get('j_kg_m2') or s.ctx['coast'].get('j_kg_m2')
@@ -909,9 +860,10 @@ def _r_friction(s):
     v = s.values
     out = 'J {:.3e} kg.m^2, B {:.2e} N.m.s, Tc {:.2f} mN.m'.format(
         v['j_kg_m2'], v.get('b_nm_s_per_rad') or 0.0, v['tc_nm'] * 1e3)
-    rescaled = _rescale_for_j(s, j_was, v['j_kg_m2'])
-    if rescaled is not None:
-        out += '; ' + rescaled[2]
+    if after_drag is not None:
+        extra = after_drag(s, j_was, v['j_kg_m2'])
+        if extra:
+            out += '; ' + extra
     if not firmware.has(s.dev.node, 'friction_ff'):
         return out + '; no Coulomb ff in this firmware'
     r = friction.friction_ff(s.dev, v['tc_nm'] * 1e3,
@@ -1033,9 +985,12 @@ STEPS = (
     Step('bias', 'Board', 'Current-sense bias', _p_bias, _r_bias),
     Step('gain', 'Board', 'Current-sense gain', _p_gain, _r_gain),
     Step('slope', 'Board', 'Current-sense slope', _p_slope, _r_slope),
-    Step('fold', 'Board', 'Current-sense offset fold', _p_fold, _r_fold),
     Step('winding', 'Identify', 'Electrical zero + winding order', _p_winding,
          _r_winding),
+    # The extended calibration (plans.EXTENDED) from here.  Fold after
+    # winding so the default calibration is the first five steps; it needs
+    # only this run's slope sweep.
+    Step('fold', 'Board', 'Current-sense offset fold', _p_fold, _r_fold),
     Step('runout', 'Encoder', 'Encoder runout table', _p_runout, _r_runout),
     # Before cogging: its slow spins carry the ff (on any trajectory) and
     # stick and slip without it on a geared motor.

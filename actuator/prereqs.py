@@ -63,13 +63,13 @@ DEPS = {
                  uses=['i_cal', 'enc_filter', 'skip_k'],
                  provides=['runout', 'enc_filter']),
     # The drag (J, Tc/B) and the Coulomb ff on its Tc.  After the loops,
-    # which the ff's PP moves need; they were designed on the coast's (or
-    # the CSV's) J, so a drag J that differs rescales the velocity gains.
+    # which the ff's PP moves need.  It changes no gain here; p4sysid's
+    # friction step adds the velocity-gain rescale to the drag's J.
     'friction': _d(requires=['i_test', 'L', 'kt', 'J', 'e_zero',
                              'isense_gain', 'current_pi', 'rated_torque',
                              'vel_gains', 'pos_gains'],
                    uses=['i_peak', 'limits', 'top_speed'],
-                   provides=['J', 'friction', 'friction_ff', 'vel_gains']),
+                   provides=['J', 'friction', 'friction_ff']),
     'cogging': _d(requires=['poles', 'e_zero', 'vel_gains', 'current_pi',
                             'latency'],
                   uses=['runout', 'enc_filter', 'i_peak', 'friction_ff'],

@@ -5,6 +5,12 @@ All notable changes to p4core are documented in this file. The format follows
 wheel next to the apps that need it (the A/B test package carries both); an
 app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 
+## [Unreleased]
+
+### Changed
+- The actuator calibration no longer changes any loop gain. The friction step used to rescale the velocity Kp/Ki to each drag's J (with no prompt under a script), so repeat calibrations of one actuator left it with different gains and different performance. That rescale is now p4sysid's (pucktuner): `steps._r_friction` takes an `after_drag` hook between the drag and the Coulomb feed-forward, and p4sysid's friction step uses it.
+- The default actuator calibration (`plans.ACTUATOR`) is now steps 1-5: encoder, bias, gain, slope, electrical zero + winding order. The new `plans.EXTENDED` adds fold, runout, friction and cogging, and `PLANS['extended']` ("Extended Calibration") runs all nine. Fold now runs after winding, so the default steps are numbered 1-5 and the extended steps 6-9. If fold does not run, the drive-gated offset register stays cleared: the slope step clears it.
+
 ## [0.1.3] - 2026-11-20
 
 ### Changed

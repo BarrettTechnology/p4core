@@ -14,7 +14,7 @@ from p4core.tests.fake import current_node, legacy_node          # noqa: E402
 
 # p4sysid registers its steps into the same tables; without it these are
 # the actuator steps alone.
-ALONE = ('encoder', 'bias', 'gain', 'slope', 'fold', 'winding', 'runout',
+ALONE = ('encoder', 'bias', 'gain', 'slope', 'winding', 'fold', 'runout',
          'friction', 'cogging', 'save', 'export')
 
 
@@ -57,11 +57,29 @@ class Alone(unittest.TestCase):
 
     def test_numbered(self):
         # Stage order: the sense first, then what drives measured current.
-        got = [(st.key, stage) for _, stage, st in plans.numbered(plans.ACTUATOR)]
+        got = [(st.key, stage)
+               for _, stage, st in plans.numbered(plans.ACTUATOR_ALL)]
         self.assertEqual(got, [('encoder', 1), ('bias', 1), ('gain', 2),
                                ('slope', 3), ('winding', 3), ('fold', 4),
                                ('runout', 4), ('friction', 4),
-                               ('cogging', 5)])
+                               ('cogging', 4)])
+
+    def test_default_is_the_first_five_numbered_steps(self):
+        # The menus number the default 1-5 and the extended steps 6-9, both
+        # by stage and in run order.
+        self.assertEqual(plans.ACTUATOR,
+                         ('encoder', 'bias', 'gain', 'slope', 'winding'))
+        self.assertEqual(plans.EXTENDED,
+                         ('fold', 'runout', 'friction', 'cogging'))
+        self.assertEqual(plans.run_order(plans.ACTUATOR_ALL),
+                         list(plans.ACTUATOR_ALL))
+        staged = [st.key for _, _, st in plans.numbered(plans.ACTUATOR_ALL)]
+        self.assertEqual(staged, list(plans.ACTUATOR_ALL))
+
+    def test_plans(self):
+        self.assertEqual(plans.PLANS['actuator'][1], plans.ACTUATOR)
+        self.assertEqual(plans.PLANS['extended'][1], plans.ACTUATOR_ALL)
+        self.assertEqual(plans.PLANS['extended'][0], 'Extended Calibration')
 
     def test_run_order(self):
         self.assertEqual(plans.run_order(['cogging', 'bias', 'runout']),
@@ -88,8 +106,9 @@ class Alone(unittest.TestCase):
             plans.expand(['ab', 'nonsense'])
 
     def test_current_firmware_runs_every_step(self):
-        self.assertEqual(plans.available_keys(current_node(), plans.ACTUATOR),
-                         plans.ACTUATOR)
+        self.assertEqual(plans.available_keys(current_node(),
+                                              plans.ACTUATOR_ALL),
+                         plans.ACTUATOR_ALL)
 
     def test_legacy_firmware_runs_the_board_steps(self):
         node = legacy_node()

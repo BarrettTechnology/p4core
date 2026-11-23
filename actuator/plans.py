@@ -6,18 +6,28 @@ actuator of the batch then gets the CSV (flash, set-id, config load,
 Save.All, reboot: before any step) and the actuator calibration: the steps
 whose results differ unit to unit and that the CSV does not carry.
 
-  ACTUATOR  the per-actuator calibration:
+  ACTUATOR  the per-actuator calibration, the default:
               encoder          the sensor at rest; its chip and filter
               bias, gain       current-sense offsets and gain
-              slope, fold      the shunt amplifier's current-proportional
-                               offset and its drive-on baseline
+              slope            the shunt amplifier's current-proportional
+                               offset
               winding          electrical zero and winding order
+  EXTENDED  the optional steps the Extended Calibration adds to it:
+              fold             the slope sweep's drive-on baseline (needs
+                               this run's slope)
               runout           the magnet's runout table
               friction         friction calibration: the drag's J, B and
-                               Tc (the velocity gains rescaled to its J),
-                               then the Coulomb feed-forward on that Tc:
-                               before cogging, whose slow spins it carries
+                               Tc, then the Coulomb feed-forward on that
+                               Tc: before cogging, whose slow spins it
+                               carries
               cogging          the cogging feed-forward bins
+
+Neither changes a loop gain: tuning is p4sysid's (pucktuner), and a gain
+search here would make two runs on one actuator measure different drives.
+The default leaves out the steps whose result is a keep-or-drop judgement
+(the ff and cogging A/Bs) or that need the loops, so it repeats run to run.
+Without fold, the drive-gated offset register stays cleared: the slope step
+clears it before bias and gain (steps._clear_board_corrections).
 
 Slope and fold belong to the board as much as bias and gain do: the CSV
 loader skips their rows and export never writes them
@@ -36,12 +46,17 @@ then only set when that Save.App + Save.Mfg failed, which save() can try again.
 from . import prereqs, steps
 
 FINAL = ('save', 'export')
-ACTUATOR = ('encoder', 'bias', 'gain', 'slope', 'fold', 'winding', 'runout',
-            'friction', 'cogging')
+ACTUATOR = ('encoder', 'bias', 'gain', 'slope', 'winding')
+EXTENDED = ('fold', 'runout', 'friction', 'cogging')
+#: Every actuator step: the default, then the extended ones (STEPS order).
+ACTUATOR_ALL = ACTUATOR + EXTENDED
 
-#: name -> (menu title, steps)
+#: name -> (menu title, steps).  Extended Calibration runs the default steps
+#: too: fold needs this run's slope sweep, and the rest want the current
+#: sense and electrical zero they leave.
 PLANS = {
     'actuator': ('Actuator Calibration', ACTUATOR),
+    'extended': ('Extended Calibration', ACTUATOR_ALL),
 }
 
 #: Other names the apps' command lines take for a step.  offsets,
