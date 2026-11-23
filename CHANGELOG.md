@@ -13,6 +13,7 @@ app pins the version that has what it uses (puckutility 1.4.3: `>=0.1.2`).
 ### Fixed
 - A save from a K64 drive left enabled in IDLE is no longer refused. An enabled K64 holds the bridge on in IDLE (the active short), so 5.0.7+ refused the save (0x08000022) and `in_pre_op` gave up because the outputs read as on; the current-sense bias step failed this way. A drive enabled in IDLE is now shut down (controlword 0x06) and saved through PRE-OP. A drive enabled in any other mode is still refused.
 - The drag fit no longer rejects a slow cruise as standstill. With the drag stream at one frame per 1 ms SYNC, each speed was a one-frame difference, where a count is 1.5 rad/s, so a 6 rad/s cruise that read 2 counts in one frame fell under the 5 rad/s guard; friction calibration failed with "only 0 usable drag windows" (WAM4 at 5 kHz control). Speeds are now taken over 5 ms.
+- A motor thermistor the drive is not configured for is no longer read as 0.0 C. With 0x3026 (divider, beta, R at base) blank the firmware's conversion is 0/0, which the K64 reports as exactly 0.0 C, a plausible temperature; Rs was then referred to 0 C, or (once the DSP ran 45 C warmer) the DSP stood in for a connected thermistor. That reading now counts as no thermistor (`therm_unconfigured`), and the commission start check warns. The P4-37 templates gain the thermistor rows: the board's 3010 ohm pull-up, with the NTC's beta and resistance left 0 for the motor's CSV (WAM4: US Sensor 203JL1A, 3892 / 20000).
 
 ## [0.1.2] - 2026-11-13
 

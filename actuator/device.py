@@ -69,6 +69,11 @@ THERM_PLAUSIBLE_C = (-30.0, 200.0)
 #: and the winding sweep tripped 0x4210 at 70 C, 2026-10-26).  A real
 #: winding at 20 C under a K64 idling at 52 C is 32 C colder.
 THERM_BELOW_DSP_MAX_C = 45.0
+#: The thermistor's conversion (0x3026): divider pull-up to 3.3 V (ohm),
+#: beta, base temperature (C), resistance at it (ohm).  1, 2 and 4 must be
+#: non-zero for the drive to report a temperature (0 C is a valid base).
+THERM_CONFIG = 0x3026
+THERM_CONFIG_NONZERO = (1, 2, 4)
 
 #: Purr generator (0x302B).  Sub-index 1 gates a torque overlay that
 #: motion_trq_control() sums straight into the torque demand, so it perturbs
@@ -1004,10 +1009,23 @@ class P4Drive:
         winding temperature is worse than an uncorrected one honestly labelled.
         An implausible reading (THERM_PLAUSIBLE_C) is no sensor and also
         returns None; the raw value is kept in ``therm_implausible_c``.
+
+        So does a thermistor the drive is not configured for: with 0x3026's
+        divider, beta or base resistance 0 the firmware's conversion is 0/0,
+        which the K64 publishes as exactly 0.0 C -- a plausible temperature
+        (a wiped P4-37, whose template had no 0x3026 rows, 2026-11-23).
+        ``therm_unconfigured`` is then True.  0x3026 is read only for an
+        exact 0.0, the one value a blank conversion gives, so a supervising
+        loop pays one SDO per sample.
         """
+        self.therm_unconfigured = False
         try:
             t = self.node.sdo['Motor']['Therm'].raw / 10.0
         except Exception:
+            return None
+        if t == 0.0 and not self.therm_configured():
+            self.therm_unconfigured = True
+            self.therm_implausible_c = t
             return None
         if not THERM_PLAUSIBLE_C[0] <= t <= THERM_PLAUSIBLE_C[1]:
             self.therm_implausible_c = t
@@ -1017,6 +1035,16 @@ class P4Drive:
             self.therm_implausible_c = t
             return None
         return t
+
+    def therm_configured(self):
+        """False when 0x3026 (divider pull-up, beta, R at base) has a 0 in it,
+        so the firmware cannot convert the thermistor; True when it is set or
+        cannot be read (older firmware: judged by the reading alone)."""
+        try:
+            return all(int(self.node.sdo[THERM_CONFIG][sub].raw) > 0
+                       for sub in THERM_CONFIG_NONZERO)
+        except Exception:
+            return True
 
     def _read_dsp_temp_c(self):
         """0x3000,2 in degC, or None (absent or implausible)."""

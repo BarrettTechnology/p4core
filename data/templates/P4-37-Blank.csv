@@ -121,6 +121,14 @@ Rated Continuous Torque (in mNm),, 0x3024,8,UNSIGNED16,0
 Cutoff filter frequency (Hz),, 0x3025,2,INTEGER16, 50
 Temp Limited Current (mA),,0x3025,3,INTEGER16, 3000
 
+# Thermistor: the P4-37's divider pull-up is 3.01 kOhm. Beta and R at the base
+# temperature are the motor's NTC (WAM4: US Sensor 203JL1A, 3892 / 20000); 0
+# until set, and the drive then reports no motor temperature.
+Resistance of R in Divider (Ohms),, 0x3026,1,UNSIGNED16,3010
+Beta Value,,0x3026,2,UNSIGNED16,0
+Baseline Temperature (in degrees C),, 0x3026,3,UNSIGNED16,25
+Resistance of Thermistor at baseline Temperature (Ohms),,0x3026,4,UNSIGNED16,0
+
 # Profile mode
 Acceleration (cts/s^2),,0x6083,0,UNSIGNED32,500000
 Deceleration (cts/s^2),,0x6084,0,UNSIGNED32,500000

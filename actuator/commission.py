@@ -661,6 +661,13 @@ def _stage_preflight(dev, limits, reboot, rep):
             # step behind the copper under load.
             dev._log('commission: no thermistor: the DSP ({:.0f} C) stands '
                      'in for the winding'.format(t))
+        if getattr(dev, 'therm_unconfigured', False):
+            # A connected thermistor reads nothing until 0x3026 is set; the
+            # DSP is a poor stand-in (a K64 idles 30 C over the winding).
+            rep.check('thermistor configured', False,
+                      '0x3026 (divider, beta, R at base) has a 0, so the '
+                      'drive cannot read a motor thermistor: set it for the '
+                      'motor (File > Thermistor Settings) if it has one')
         gate = start_temp_c(limits)
         rep.check('winding temperature', t < gate,
                   '{:.1f} C{}, limit {:.0f} C; a run starts under {:.0f} C{}'
