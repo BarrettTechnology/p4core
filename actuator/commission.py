@@ -871,9 +871,19 @@ def _stage_drag(dev, limits, reboot, rep):
             kt_nm_per_a=v['kt_nm_per_a'], ld_h=v['ld_h'], lq_h=v['lq_h'],
             current_a=i_drag, max_current_a=c['i_test'],
             top_rpm=top_drag, low_rpm=min(200.0, 0.2 * top_drag),
-            step_rpm=0.8 * top_drag, j_prior_kg_m2=coast['j_kg_m2'])
+            step_rpm=0.8 * top_drag, j_prior_kg_m2=coast['j_kg_m2'],
+            friction_accel_rad_s2=coast.get('tc_over_j'))
         rep.raw['drag'] = drag
         j = drag['j_kg_m2']
+        if not j > 0:
+            # Not a rotor: the torque the fit reads is not the shaft's (the
+            # WAM4 at 0.5/1 A: Tc 0.14 -> 0.46 N.m with the drag current,
+            # J -4.9e-06).  Fail the step; 0x2381/J are left alone.
+            raise SysidError(
+                'the drag fit gave J {:.3e} kg.m^2: the drag torque does not '
+                'fit this motor (Coulomb {:.3f} N.m) -- friction not '
+                'measured, J and the velocity gains left as they are'
+                .format(j, drag['a_nm']))
         v['b_nm_s_per_rad'] = drag['b_nm_s_per_rad']
         v['tc_nm'] = drag['a_nm']
         w_top = top_drag * 2 * math.pi / 60.0
@@ -884,9 +894,19 @@ def _stage_drag(dev, limits, reboot, rep):
                   '{:.1f} % of Coulomb; below {:.0f} % B trades against Tc '
                   'and is not a measurement'.format(
                       top_drag, b_share * 100, B_MIN_SHARE * 100))
+        if coast['j_kg_m2'] and abs(j / coast['j_kg_m2'] - 1) > J_AGREEMENT:
+            # Not stored, and no gains rescaled to it: two drag runs biased
+            # alike agree with each other (the WAM4 at 250 rad/s^2 saved J
+            # -34 % and Tc x2 under -y, 2026-11-23), and the coast is the
+            # independent check.
+            raise SysidError(
+                'the drag J {:.3e} kg.m^2 is {:+.0f} % off the coast\'s '
+                '{:.3e} (Coulomb {:.4f} N.m): friction not measured, J and '
+                'the velocity gains left as they are'.format(
+                    j, (j / coast['j_kg_m2'] - 1) * 100, coast['j_kg_m2'],
+                    drag['a_nm']))
         if coast['j_kg_m2']:
-            rep.check('J drag vs coast', abs(j / coast['j_kg_m2'] - 1)
-                      <= J_AGREEMENT,
+            rep.check('J drag vs coast', True,
                       'drag {:.3e} vs coast {:.3e} kg.m^2 ({:+.0f} %)'.format(
                           j, coast['j_kg_m2'],
                           (j / coast['j_kg_m2'] - 1) * 100))

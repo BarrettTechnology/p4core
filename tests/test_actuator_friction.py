@@ -170,3 +170,68 @@ class TestFrictionStep(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestStageDragGuard(unittest.TestCase):
+    """A drag fit with a non-positive J is not a rotor (the WAM4's
+    J -4.9e-06 at 0.5/1 A, 2026-11-23): the step fails before J or the
+    friction reach the values."""
+
+    def _rep(self):
+        rep = mock.Mock()
+        rep.values = {'kt_nm_per_a': 0.564, 'ld_h': 1.4e-3, 'lq_h': 2.4e-3,
+                      'r_ohm': 1.87}
+        rep.ctx = {'s': {'i_max_a': 10.0, 'v_nom': 48.0},
+                   'coast': {'j_kg_m2': 1.08e-4},
+                   'no_load': {'no_load_ideal_rpm': 995.0},
+                   'i_test': 1.5, 'bus': 48.0}
+        rep.raw = {}
+        return rep
+
+    def _run(self, j):
+        dev = mock.Mock()
+        dev.estim_drag.return_value = {'j_kg_m2': j, 'a_nm': 0.30,
+                                       'b_nm_s_per_rad': 6.7e-3}
+        rep = self._rep()
+        lim = mock.Mock(max_speed_rpm=1000.0)
+        with mock.patch.object(commission, 'drag_current',
+                               lambda *a: 0.5), \
+                mock.patch.object(commission, 'supply_limited_rpm',
+                                  lambda *a: None):
+            commission._stage_drag(dev, lim, None, rep)
+        return rep
+
+    def test_negative_j_fails_the_step(self):
+        with self.assertRaises(commission.SysidError) as cm:
+            self._run(-4.9e-6)
+        self.assertIn('drag fit gave J', str(cm.exception))
+
+    def test_zero_j_fails_the_step(self):
+        with self.assertRaises(commission.SysidError):
+            self._run(0.0)
+
+    def test_a_j_off_the_coast_fails_the_step(self):
+        """The WAM4 at 250 rad/s^2: both drag runs biased alike, J -34 %."""
+        with self.assertRaises(commission.SysidError) as cm:
+            self._run(0.66e-4)
+        self.assertIn("off the coast's", str(cm.exception))
+
+    def test_a_j_inside_the_agreement_passes(self):
+        rep = self._run(1.0e-4)
+        self.assertAlmostEqual(rep.values['j_kg_m2'], 1.0e-4)
+
+    def test_the_coast_friction_rate_reaches_the_drag(self):
+        dev = mock.Mock()
+        dev.estim_drag.return_value = {'j_kg_m2': 1.0e-4, 'a_nm': 0.024,
+                                       'b_nm_s_per_rad': 2.5e-4}
+        rep = self._rep()
+        rep.ctx['coast']['tc_over_j'] = 236.0
+        rep.ctx['coast']['b_over_j'] = 3.0
+        with mock.patch.object(commission, 'drag_current',
+                               lambda *a: 0.5), \
+                mock.patch.object(commission, 'supply_limited_rpm',
+                                  lambda *a: None):
+            commission._stage_drag(dev, mock.Mock(max_speed_rpm=1000.0),
+                                   None, rep)
+        self.assertEqual(
+            dev.estim_drag.call_args.kwargs['friction_accel_rad_s2'], 236.0)

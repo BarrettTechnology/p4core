@@ -568,6 +568,19 @@ DRAG_REPEATS = 4
 #: pull-out, at most DRAG_RETRIES times.
 DRAG_ACCEL_RAD_S2 = 500.0
 DRAG_RETRIES = 2
+#: A run whose J is not positive, or a full-current run whose J is off the
+#: half-current run's by more than this, restarts the staircase from the
+#: low current at half the acceleration, at most DRAG_RETRIES times.  The
+#: WAM4 (J 1.0e-4, Tc 24 mN.m, 2026-11-23) fitted Tc 0.14 / 0.46 N.m and J
+#: 6.4e-5 / -7.3e-5 at 0.5 / 1 A stepping at 500 rad/s^2, and the coast's
+#: J 1.0e-4 and Tc 0.024 at 144: the stiff spring let the full ceiling
+#: through.  The P4-42 and GL40 fit within 1 % at 500, so the ceiling stays.
+#: The runs are judged against each other, not the coast: a coast J that is
+#: off would halve a good drag into a pull-out.  Two runs biased alike agree
+#: (the WAM4 at 250: 7.4e-5 / 5.9e-5), so the restart steps to half the
+#: coast's Tc/J when that is lower, and commission refuses a drag J outside
+#: J_AGREEMENT of the coast's.
+DRAG_J_RETRY = 0.3
 #: Peak load angle, electrical degrees, the acceleration is sized to.  The
 #: firmware trips at 60 (INJ_DRAG_TRIP_F16).
 DRAG_LOAD_BUDGET_DEG = 40.0
@@ -1961,7 +1974,8 @@ class P4Drive:
                    current_a=None, accel_rad_s2=DRAG_ACCEL_RAD_S2,
                    low_rpm=DRAG_LOW_RPM, top_rpm=DRAG_TOP_RPM,
                    step_rpm=DRAG_STEP_RPM, repeats=DRAG_REPEATS,
-                   j_prior_kg_m2=None, max_current_a=None):
+                   j_prior_kg_m2=None, max_current_a=None,
+                   friction_accel_rad_s2=None):
         """J, B and Coulomb friction with no velocity loop in the way.
 
         The velocity loop's gains are derived from J and B, so a measurement of
@@ -2006,6 +2020,13 @@ class P4Drive:
         double, up to *max_current_a*, before the acceleration is halved
         (node 13's BO3518 gearhead needs 0.3-0.6 A of q to break away; 0.49 A
         on d gives about that at the 60-degree trip).
+
+        A run whose J is not positive, or a full-current J off the
+        half-current one by more than DRAG_J_RETRY, starts the staircase
+        again at half the acceleration, or at half of
+        *friction_accel_rad_s2* (the coast's Tc/J, the rate friction alone
+        stops the rotor at) when that is lower: the WAM4 (Tc/J 236 rad/s^2)
+        read Tc twice the coast's and J -34 % at 250, and right at 121-144.
 
         Returns ``j_kg_m2``, ``b_nm_s_per_rad``, ``a_nm`` (Tc, the mean of the
         two directions), ``zero_error_deg`` and ``skew_us`` (the angle errors
@@ -2058,8 +2079,10 @@ class P4Drive:
             j_prior = DRAG_J_PRIOR_KG_M2
             self._log('Drag: no stored J; sizing the drag for a {:.1e} kg.m^2 '
                       'rotor'.format(j_prior))
+        j_first = j_prior
         accel = accel_rad_s2
         taken = []
+        refits = 0
         # The low current first: its spring is the weaker, so a pull-out
         # shows there and the halved acceleration serves both runs.
         k = 0
@@ -2108,10 +2131,24 @@ class P4Drive:
                     accel = 0.5 * (ran if ran else accel)
             if doubled:
                 continue
-            k += 1
             taken.append((i_hold, windows, info, cruises))
             # Only the next run's sizing needs this J.
             fit = fit_run(i_hold, windows, kt_nm_per_a or kt_size)
+            bad = self._drag_j_bad(fit['j_kg_m2'],
+                                   taken[0][4] if k == 1 else None)
+            if bad and refits < DRAG_RETRIES:
+                ran = min(d['accel_rad_s2'] for d in info)
+                refits += 1
+                accel = 0.5 * min(ran, friction_accel_rad_s2 or ran)
+                self._log('Drag: {:.2f} A fits J {:.2e} kg.m^2 ({}) stepping '
+                          'at {:.0f} rad/s^2: the spring was still ringing; '
+                          'again from the start at {:.0f}'.format(
+                              i_hold, fit['j_kg_m2'], bad, ran, accel))
+                # A breakaway's doubled current stands.
+                k, taken, j_prior = 0, [], j_first
+                continue
+            taken[-1] += (fit['j_kg_m2'],)
+            k += 1
             if fit['j_kg_m2'] > 0:
                 self._log('Drag: {:.2f} A fits J {:.2e} kg.m^2 (sized for '
                           '{:.2e})'.format(i_hold, fit['j_kg_m2'], j_prior))
@@ -2151,7 +2188,7 @@ class P4Drive:
         kt_pk = kt_nm_per_a / math.sqrt(2.0)
 
         runs = []
-        for i_hold, windows, info, _ in taken:
+        for i_hold, windows, info, _, _ in taken:
             fit = fit_run(i_hold, windows, kt_nm_per_a)
             fit['spring'] = info
             self._log('Drag: {:.2f} A: J = {:.4e} kg.m^2, B = {:.3e} '
@@ -2187,6 +2224,17 @@ class P4Drive:
                       j, fits.kgm2_to_gcm2(j), b, a, zero, skew_us))
         self.last_estim_drag = result
         return result
+
+    @staticmethod
+    def _drag_j_bad(j, j_lo):
+        """Why a drag run's J is not to be trusted, or None: not positive,
+        or past DRAG_J_RETRY of *j_lo* (the half-current run's)."""
+        if not j > 0:
+            return 'not positive'
+        if j_lo and j_lo > 0 and abs(j / j_lo - 1.0) > DRAG_J_RETRY:
+            return '{:+.0f} % off the half-current run\'s {:.2e}'.format(
+                (j / j_lo - 1.0) * 100.0, j_lo)
+        return None
 
     def _stored_inertia_kg_m2(self):
         """The drive's Calibration.j in kg.m^2, or None when it has none."""
