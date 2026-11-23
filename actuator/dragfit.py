@@ -162,8 +162,12 @@ def drag_fit_windows(windows, min_speed_rad_s=5.0):
         it = np.asarray(it, float)
         if p.size < 16:
             continue
-        # Speed over ~1 ms spans, however the window is sampled.
-        span = max(1, int(round(0.001 / max(np.median(np.diff(t)), 1e-9))))
+        # Speed over ~5 ms spans, however the window is sampled: over one
+        # 1 ms stream frame a count is 1.5 rad/s, so a 6 rad/s cruise reads
+        # 2-5 counts and one 2-count frame looked like standstill (the WAM4
+        # at 5 kHz control, 2026-11-23).  5 ms is still a tenth of the
+        # spring's period, so a real stall is not smoothed away.
+        span = max(1, int(round(0.005 / max(np.median(np.diff(t)), 1e-9))))
         w = (p[span:] - p[:-span]) / (t[span:] - t[:-span])
         if np.min(np.abs(w)) < min_speed_rad_s or np.ptp(np.sign(w)) != 0:
             continue
