@@ -708,6 +708,12 @@ STIFF_KI_X = 3.5
 #: velocity design), and 3.5x of that still stick-slipped at 30 rpm.  The
 #: hand capture that held: Kp 0.039, Ki 0.00274 (0.07).
 STIFF_KI_PER_KP = 0.07
+#: Stiffer again while it still stick-slips: x2 of an autotuned Kp can be
+#: softer than the hand tune's x2 that held (2026-11-24, node 15 v1.3.2-
+#: autotune: Kp 0.0136 -> 0.0271 / Ki 0.0019 still 30 +- 34 rpm, where
+#: v1.2.8's 0.0388 / 0.0027 held).  Each rung is tried only if the one before
+#: stick-slipped; a fault or any other error ends the ladder.
+STIFF_KP_XS = (STIFF_KP_X, 3.0, 4.0)
 
 
 def calibrate(dev, pole_pairs, log=None, **kw):
@@ -718,7 +724,7 @@ def calibrate(dev, pole_pairs, log=None, **kw):
     The table matters most where the load sticks (a gearhead at low speed),
     and that is where the configured velocity loop may not hold the fit
     speed.  On stick-slip the captures run again with the loop held stiffer
-    (STIFF_KP_X, STIFF_KI_X) in RAM; the configured gains are written back
+    (STIFF_KP_XS, STIFF_KI_X) in RAM, one rung at a time; the configured gains are written back
     before this returns, whatever happens, so nothing stiffer is saved.  The
     table is a torque against angle and does not depend on the gains."""
     log = log or (lambda *a: None)
@@ -727,22 +733,30 @@ def calibrate(dev, pole_pairs, log=None, **kw):
     except StickSlip as exc:
         kp = float(steptest.read(dev, 'vel_kp'))
         ki = float(steptest.read(dev, 'vel_ki'))
-        kp_s = kp * STIFF_KP_X
-        ki_s = max(ki * STIFF_KI_X, kp_s * STIFF_KI_PER_KP)
-        log('cogging: {}'.format(exc))
-        log('cogging: capturing again with the velocity loop held stiffer for '
-            'the captures (Kp {:.4g} -> {:.4g}, Ki {:.4g} -> {:.4g}); the '
-            'configured gains are restored after'.format(
-                kp, kp_s, ki, ki_s))
-        try:
+        last = exc
+    try:
+        for i, x in enumerate(STIFF_KP_XS):
+            kp_s = kp * x
+            ki_s = max(ki * STIFF_KI_X * x / STIFF_KP_X, kp_s * STIFF_KI_PER_KP)
+            log('cogging: {}'.format(last))
+            log('cogging: capturing again with the velocity loop held stiffer for '
+                'the captures (Kp {:.4g} -> {:.4g}, Ki {:.4g} -> {:.4g}; {}/{}); the '
+                'configured gains are restored after'.format(
+                    kp, kp_s, ki, ki_s, i + 1, len(STIFF_KP_XS)))
             steptest.write(dev, 'vel_kp', kp_s)
             steptest.write(dev, 'vel_ki', ki_s)
-            rec = _calibrate(dev, pole_pairs, log, **kw)
-        finally:
-            steptest.write(dev, 'vel_kp', kp)
-            steptest.write(dev, 'vel_ki', ki)
-        rec['stiff_loop'] = dict(kp=kp_s, ki=ki_s)
-        return rec
+            try:
+                rec = _calibrate(dev, pole_pairs, log, **kw)
+            except StickSlip as exc:
+                last = exc
+                if i + 1 == len(STIFF_KP_XS):
+                    raise
+                continue
+            rec['stiff_loop'] = dict(kp=kp_s, ki=ki_s, rung=i + 1)
+            return rec
+    finally:
+        steptest.write(dev, 'vel_kp', kp)
+        steptest.write(dev, 'vel_ki', ki)
 
 
 def _calibrate(dev, pole_pairs, log, fit_rpms=FIT_RPMS,

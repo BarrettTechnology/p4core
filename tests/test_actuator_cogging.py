@@ -450,10 +450,30 @@ class TestStiffRetry(unittest.TestCase):
         self.assertAlmostEqual(seen[1][1], kp_s * cogging.STIFF_KI_PER_KP)
         self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0097, 2.2e-5))
 
-    def test_gains_restored_when_the_stiff_retry_fails_too(self):
-        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
-                                        cogging.StickSlip('still not steady')])
+    def test_gains_restored_when_every_stiff_rung_fails_too(self):
+        n = len(cogging.STIFF_KP_XS)
+        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady')] * (1 + n))
         self.assertIsInstance(rec, cogging.StickSlip)
+        self.assertEqual(len(seen), 1 + n)
+        self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
+
+    def test_still_stick_slipping_goes_up_a_rung(self):
+        # 2026-11-24, node 15 v1.3.2-autotune: x2 of an autotuned Kp still
+        # stick-slipped; the next rung is stiffer, and the gains come back.
+        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
+                                        cogging.StickSlip('still not steady'),
+                                        {'passed': True}])
+        self.assertEqual(len(seen), 3)
+        self.assertAlmostEqual(seen[2][0], 0.0195 * cogging.STIFF_KP_XS[1])
+        self.assertGreater(seen[2][1], seen[1][1])
+        self.assertEqual(rec['stiff_loop']['rung'], 2)
+        self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
+
+    def test_a_fault_ends_the_ladder_and_restores(self):
+        rec, seen, regs = self.run_cal([cogging.StickSlip('not steady'),
+                                        cogging.SysidError('drive faulted')])
+        self.assertEqual(len(seen), 2)
+        self.assertIsInstance(rec, cogging.SysidError)
         self.assertEqual((regs['vel_kp'], regs['vel_ki']), (0.0195, 0.00079))
 
 
