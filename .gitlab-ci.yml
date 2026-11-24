@@ -2,7 +2,8 @@
 # request and every tag. Make it required for merging (Settings > Merge
 # requests > Pipelines must succeed).
 #
-# It runs in the apps' build image, burt/puck-deb-u20 (puckutility or pucktuner
+# It runs on the `puck` runner (ewok: docker executor on rootless podman) in
+# the apps' build image, burt/puck-deb-u20 (puckutility or pucktuner
 # scripts/Dockerfile.builder, built on the runner once; see their
 # .gitlab-ci.yml), whose /opt/puckbuild venv already has every dependency.
 # The tests import p4core by name from the checkout's parent directory, so
@@ -25,7 +26,7 @@ workflow:
 test:
   image: burt/puck-deb-u20
   tags:
-    - docker
+    - puck
   script:
     # An image built before make/git/xvfb were added to Dockerfile.builder:
     # install them for this job (rebuild the image to skip this).
